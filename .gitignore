@@ -14,3 +14,4 @@ __pycache__/
 zhiyu-hackathon/
 # agent working notes
 .workbuddy/
+docs/accept-*.log
