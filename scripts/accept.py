@@ -51,11 +51,24 @@ def check(name, fn):
         print(f"  [失败] {name}  {type(exc).__name__}: {exc}")
 
 
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def opener_for(url, jar=None):
+    """本机地址绕开系统代理，否则 HTTP_PROXY 会把 127.0.0.1 也拦走，报出误导性的 502。"""
+    handlers = []
+    if (urlsplit(url).hostname or "") in LOOPBACK:
+        handlers.append(urllib.request.ProxyHandler({}))
+    if jar is not None:
+        handlers.append(urllib.request.HTTPCookieProcessor(jar))
+    return urllib.request.build_opener(*handlers)
+
+
 class Client:
     def __init__(self, base):
         self.base = base
         self.jar = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
+        self.opener = opener_for(base, self.jar)
 
     def call(self, path, data=None, headers=None, expect=200):
         """expect=200 时断言并返回 body；expect=None 时返回 (status, body)。"""
@@ -345,6 +358,44 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def fail(message):
+    """打印到 stdout 再退出，避免提示跑到 stderr 里被日志重定向丢掉。"""
+    print(message, flush=True)
+    raise SystemExit(1)
+
+
+def probe(base):
+    """先确认这个地址后面确实是知遇，避免把部署问题报成 27 项功能失败。"""
+    try:
+        with opener_for(base).open(base + "/api/health", timeout=10) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode(errors="replace")[:160]
+        code = error.code
+        error.close()
+        if code == 503:
+            fail(
+                f"{base}/api/health 返回 503：{detail}\n"
+                "进程在跑，但数据库不可用。先看 journalctl -u zhiyu -n 100，多半是 ZHIYU_DB 路径不可写。"
+            )
+        fail(
+            f"{base}/api/health 返回 HTTP {code}。\n"
+            "这个地址后面不是知遇，或反向代理没把请求转给应用。先按 docs/DEPLOY.md 完成部署。"
+        )
+    except OSError as error:
+        fail(
+            f"{base}/api/health 连不上：{error}\n"
+            "检查域名解析、安全组 80/443，以及 systemd 是否在跑。代码没部署到这台机器时，这一步必然失败。"
+        )
+    try:
+        body = json.loads(raw.decode() or "{}")
+    except ValueError:
+        fail(f"{base}/api/health 返回的不是 JSON，多半是反代默认页或站点首页。这个地址后面不是知遇。")
+    if body.get("ok") is not True:
+        fail(f"{base}/api/health 返回异常：{str(body)[:200]}")
+    return body
+
+
 def spawn():
     tmp = tempfile.mkdtemp(prefix="zhiyu-accept-")
     port = free_port()
@@ -368,7 +419,7 @@ def spawn():
     base = f"http://127.0.0.1:{port}"
     for _ in range(40):
         try:
-            with urllib.request.urlopen(base + "/api/health", timeout=1) as response:
+            with opener_for(base).open(base + "/api/health", timeout=1) as response:
                 if response.status == 200:
                     return base, process, tmp
         except OSError:
@@ -396,6 +447,8 @@ def main():
 
     started = time.time()
     try:
+        health = probe(base)
+        print(f"目标确认：build={health.get('version')}，数据库 {health.get('db')}")
         group_available(base)
         group_isolation(base)
         group_publish(base)
