@@ -39,10 +39,16 @@ sudo chown caddy:caddy /var/log/caddy
 
 ## 3. 代码
 
+部署的是带 B2 改动的分支，不是上游 `main`：
+
 ```bash
-sudo -u zhiyu git clone https://github.com/kane959/zhiyu-hackathon.git /srv/zhiyu/app
+sudo -u zhiyu git clone https://github.com/Yaki-Blake/zhiyu-hackathon.git /srv/zhiyu/app
 cd /srv/zhiyu/app
+sudo -u zhiyu git checkout feat/b2-deploy-foundation
+git log -1 --format='%h %s'   # 应显示 84b22de 或更新
 ```
+
+上游仓库是 `https://github.com/kane959/zhiyu-hackathon.git`，`main` 停在 `554f13e`，没有 B2 的任何改动，不要直接部署它。
 
 ## 4. 环境变量
 
