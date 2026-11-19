@@ -364,11 +364,43 @@ def fail(message):
     raise SystemExit(1)
 
 
+def check_base(base):
+    """发请求前先拦掉占位符和中文域名。
+
+    urllib 把非 ASCII 主机塞进 Host 头时抛 UnicodeEncodeError，traceback 有十几行，
+    看不出真正原因。在这里先给一句人话。
+    """
+    parts = urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        fail(
+            f"地址不完整：{base}\n"
+            "要带 http:// 或 https:// 和域名，例如 https://zhiyu.example.com"
+        )
+    host = parts.hostname
+    try:
+        host.encode("ascii")
+    except UnicodeEncodeError:
+        fail(
+            f"域名里含中文：{host}\n"
+            "这里要填真实的域名，不是文档里的占位符。例如 --base https://zhiyu.example.com\n"
+            "还没部署就先别带 --base，直接跑本地自起实例。"
+        )
+    lowered = host.lower()
+    for token in ("example.com", "example.org", "your-domain", "yourdomain", "xxx"):
+        if token in lowered:
+            fail(
+                f"域名看起来仍是占位符：{host}\n"
+                f"把 --base 换成你实际能访问的地址，或用本机实例：--base http://127.0.0.1:4173"
+            )
+
+
 def probe(base):
     """先确认这个地址后面确实是知遇，避免把部署问题报成 27 项功能失败。"""
     try:
         with opener_for(base).open(base + "/api/health", timeout=10) as response:
             raw = response.read()
+    except UnicodeEncodeError:
+        fail(f"地址里有无法直接发送的字符：{base}\n换成 ASCII 域名再试。")
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")[:160]
         code = error.code
@@ -439,6 +471,7 @@ def main():
     process = tmp = None
     if args.base:
         base = args.base.rstrip("/")
+        check_base(base)
         print(f"验收目标：{base}")
         print("注意：会在这个地址上创建测试工作区、卡片和反馈，跑完不会自动删除。")
     else:
