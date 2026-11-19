@@ -23,18 +23,46 @@ python server.py --open
 
 - **本地真实运行**：SQLite 保存项目、运行、不可变的发布快照、会话计数和反馈。初始没有访问量和用户反馈。看板来自实际的本地操作。
 - **合成样例**：三个问答场景均为本项目编写，可打开样例全文，证据片段可在全文定位。没有伪造的知乎链接、作者或匹配百分比。规则依据输入及预期任务筛选，最多三条，可能为空；并非模型推理。示例原工具按字符重合度挑选文本行，不能判断引文是否支持结论。读者文字稿仅在示例工具的浏览器内处理。
-- **尚未接入**：知乎官方检索、真实模型排序、知乎站内分享、账号体系和公网部署。点击“检查真实模式”会保留项目并返回 `not_configured`。新工具若无相应样例，显示空结果。
-- **使用范围**：程序只监听本机回环地址。开发者身份为当前浏览器的本机会话，不能当作正式登录；清除 Cookie 后无法再用原会话管理项目。读者计数按浏览器会话和版本去重，不代表独立自然人。
-- 数据默认保存于 `var/zhiyu.sqlite3`，不会进入 Git。可通过 `ZHIYU_DB` 指定测试副本。备份用 SQLite 的 backup API 或停服后复制完整数据目录，不要提交读者数据。
+- **尚未接入**：知乎官方检索、真实模型排序、知乎站内分享、账号体系。公网部署的代码、配置与脚本已就绪，但尚未落到真实主机，见 [docs/DEPLOY.md](docs/DEPLOY.md)。点击“检查真实模式”会保留项目并返回 `not_configured`。新工具若无相应样例，显示空结果。
+- **使用范围**：程序只监听本机回环地址。开发者身份为当前浏览器的本机会话，不能当作正式登录；清除 Cookie 后可用恢复码换回工作区（见下节）。读者计数按浏览器会话和版本去重，不代表独立自然人。
+- 数据默认保存于 `var/zhiyu.sqlite3`，不会进入 Git。可通过 `ZHIYU_DB` 指定测试副本。备份用 `scripts/backup.sh`（SQLite backup API），不要直接复制运行中的数据库文件，不要提交读者数据。
+
+## 恢复工作区与演示数据
+
+浏览器清 Cookie 或换设备后，打开 http://127.0.0.1:4173/recover ，粘贴恢复码即可回到原项目。恢复码在工作台所在浏览器首次生成时显示一次，之后只能轮换，不能找回。
+
+需要一份带数据的演示工作区时，用演示模式启动：
+
+```powershell
+$env:ZHIYU_DEMO='1'; python server.py --open
+```
+
+首次启动会写入一个示例项目、一张已发布卡片和两条反馈，恢复码保存在 `var/DEMO_CODE`（权限 600，不进 Git）。删除数据库并重启会重新生成。
+
+## 部署与运维
+
+| 事项 | 入口 |
+| --- | --- |
+| 环境变量 | `.env.example` |
+| 部署步骤 | `docs/DEPLOY.md` |
+| 日常运维与故障处理 | `docs/RUNBOOK.md` |
+| 数据模型与迁移 | `docs/DATA.md` |
+| 进程与反向代理 | `deploy/zhiyu.service`、`deploy/Caddyfile`、`deploy/nginx.conf` |
+| 备份与恢复演练 | `scripts/backup.sh`、`scripts/restore-check.sh` |
+| 并发基准 | `scripts/bench.py` |
 
 ## 团队接手
 
 | 模块 | 当前入口 | 下一步 |
 | --- | --- | --- |
-| F1 开发者工作台 | app.js 的 home / edit / match / cardEditor | 用实际工具和长文本复核 |
+| F1 开发者工作台 | app.js 的 home / edit / match / cardEditor | 用实际工具和长文本复核；可在侧栏链接 `/recover` |
 | F2 读者与看板 | drawReader / feedbackForm / dashboard | 开展手机真人试用 |
 | B1 场景筛选 | fixtures.py 的 SOURCES / rank | 接官方授权检索和模型；保留真实证据与失败状态 |
-| B2 数据与发布 | server.py、API.md | 部署前补正式身份、HTTPS、限流策略和备份恢复演练 |
+| B2 数据与发布 | server.py、API.md、docs/、deploy/、scripts/ | 等 P 提供主机与域名后执行部署 |
 | P 产品验证 | 上面的四步脚本 | 获取真实授权样本和试用反馈，核对站内分享入口 |
 
-接口与三类匹配样例见 [API.md](API.md)。`python -m unittest -v test_flow` 使用临时数据库与独立 Cookie 测试，不写工作区的实际数据。
+接口与三类匹配样例见 [API.md](API.md)。测试使用临时数据库与独立 Cookie，不写工作区的实际数据：
+
+```powershell
+python -m unittest -v test_flow test_deploy
+```
