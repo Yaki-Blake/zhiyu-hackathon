@@ -356,17 +356,24 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- rate limits -------------------------------------------------------
 
-    def limit(self, conn, bucket):
+    def limit(self, bucket):
+        """Count one write against this IP, in its own transaction.
+
+        The counter must not share the handler's transaction: a rejected request
+        (400/409/429) rolls that transaction back, which would erase the count and
+        let an attacker retry forever. Commit first, then decide.
+        """
         minute = now() // 60
         key = bucket + ":" + self.client_ip()
-        conn.execute(
-            "INSERT INTO limits VALUES(?,?,1) ON CONFLICT(k) DO UPDATE SET "
-            "n=CASE WHEN window=excluded.window THEN n+1 ELSE 1 END, window=excluded.window",
-            (key, minute),
-        )
-        count = conn.execute("SELECT n FROM limits WHERE k=?", (key,)).fetchone()[0]
-        if count % 50 == 0:
-            conn.execute("DELETE FROM limits WHERE window<?", (minute - 10,))
+        with closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
+            conn.execute(
+                "INSERT INTO limits VALUES(?,?,1) ON CONFLICT(k) DO UPDATE SET "
+                "n=CASE WHEN window=excluded.window THEN n+1 ELSE 1 END, window=excluded.window",
+                (key, minute),
+            )
+            count = conn.execute("SELECT n FROM limits WHERE k=?", (key,)).fetchone()[0]
+            if count == 1:  # first write of a new window: prune windows older than 10 minutes
+                conn.execute("DELETE FROM limits WHERE window<?", (minute - 10,))
         ck(count <= rate_cap(bucket), 429, "提交过于频繁，请稍后重试。")
 
     def read_limit(self):
@@ -401,16 +408,17 @@ class Handler(BaseHTTPRequestHandler):
             elif not path.startswith("/api/"):
                 return self.static(path)
             if post:
-                with WRITE_LOCK, closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    if path == "/api/recovery/claim":
-                        bucket = "claim"
-                    elif path.startswith("/api/cards/"):
-                        bucket = "reader"
-                    else:
-                        bucket = "dev"
-                    self.limit(conn, bucket)
-                    data = self.api(conn, path, payload, post)
+                if path == "/api/recovery/claim":
+                    bucket = "claim"
+                elif path.startswith("/api/cards/"):
+                    bucket = "reader"
+                else:
+                    bucket = "dev"
+                with WRITE_LOCK:
+                    self.limit(bucket)
+                    with closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        data = self.api(conn, path, payload, post)
             else:
                 with closing(sqlite3.connect(DB, timeout=8)) as conn:
                     if path != "/api/health":
@@ -461,7 +469,7 @@ class Handler(BaseHTTPRequestHandler):
             return dict(projects=projects, example=EXAMPLE, mode="synthetic", liveStatus="not_configured")
 
         if path == "/api/recovery" and post:
-            owner = self.ident("dev")
+            owner = self.ident("dev", True)  # first visit to /recover must still work
             code = make_code()
             stamp = now()
             conn.execute("DELETE FROM recovery WHERE owner=?", (owner,))

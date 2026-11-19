@@ -175,6 +175,25 @@ class Deploy(unittest.TestCase):
         reader.call(f"cards/{slug}/visit", {"version": 1})
         self.assertEqual(self.status_of(reader.call, f"cards/{slug}/visit", {"version": 1}), 429)
 
+    def test_rejected_writes_still_consume_quota(self):
+        """A 400 must not roll its own rate-limit counter back.
+
+        The counter lives in a separate transaction on purpose: sharing the
+        handler's transaction let every rejected request reset the count, so the
+        limiter never fired for malformed input.
+        """
+        os.environ["ZHIYU_RATE_DEV"] = "2"
+        bad = {"name": "只有一个字段"}
+        self.assertEqual(self.status_of(self.dev.call, "projects", bad), 400)
+        self.assertEqual(self.status_of(self.dev.call, "projects", bad), 429)
+
+    def test_claim_attempts_are_capped(self):
+        os.environ["ZHIYU_RATE_CLAIM"] = "2"
+        bad = {"code": "ZY-AAAA-AAAA"}
+        self.assertEqual(self.status_of(self.dev.call, "recovery/claim", bad), 400)
+        self.assertEqual(self.status_of(self.dev.call, "recovery/claim", bad), 400)
+        self.assertEqual(self.status_of(self.dev.call, "recovery/claim", bad), 429)
+
     def test_recovery_round_trip(self):
         code = self.dev.call("recovery", {})["code"]
         self.assertRegex(code, r"^ZY-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$")

@@ -8,6 +8,8 @@ User=zhiyu
 Group=zhiyu
 WorkingDirectory=/srv/zhiyu/app
 EnvironmentFile=/etc/zhiyu.env
+# Keep stdout/stderr unbuffered so journald sees lines immediately.
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 server.py --port 4173
 Restart=always
 RestartSec=3

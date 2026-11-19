@@ -76,7 +76,7 @@ systemctl status zhiyu --no-pager
 curl -s http://127.0.0.1:4173/api/health
 ```
 
-`ProtectSystem=strict` 会把文件系统设为只读，`ReadWritePaths=/srv/zhiyu/var` 是写入放行，删掉会导致 SQLite 无法建库。
+`ProtectSystem=strict` 会把文件系统设为只读，`ReadWritePaths=/srv/zhiyu/var` 是写入放行，删掉会导致 SQLite 无法建库。因此 `ZHIYU_DB` 必须是绝对路径，写成相对的 `var/...` 会落到只读的 app 目录，启动即失败。
 
 ## 6. 反向代理
 
