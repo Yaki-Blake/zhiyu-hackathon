@@ -50,6 +50,7 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 | 进程与反向代理 | `deploy/zhiyu.service`、`deploy/Caddyfile`、`deploy/nginx.conf` |
 | 备份与恢复演练 | `scripts/backup.sh`、`scripts/restore-check.sh` |
 | 并发基准 | `scripts/bench.py` |
+| 黑盒验收 | `scripts/accept.py`，判读方法见 `docs/验收.md` |
 
 ## 团队接手
 
@@ -64,5 +65,9 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 接口与三类匹配样例见 [API.md](API.md)。测试使用临时数据库与独立 Cookie，不写工作区的实际数据：
 
 ```powershell
-python -m unittest -v test_flow test_deploy
+python -m unittest -v test_flow test_deploy   # 14 组单元与集成
+python scripts/accept.py                      # 27 项黑盒验收，含 403/413/429 边界
+python scripts/accept.py --base https://域名   # 对线上地址复核，会留下测试数据
 ```
+
+验收的判读标准见 [docs/验收.md](docs/验收.md)。
