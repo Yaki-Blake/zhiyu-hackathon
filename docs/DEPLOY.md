@@ -122,6 +122,15 @@ sudo -u zhiyu crontab -e
 9. 第 31 次读者写入返回 429，1 分钟后恢复。
 10. 回退到上一 tag 后服务可用，再切回。
 
+上机后可先跑一次只读预检，把配置、进程、网络、数据、备份逐项核对：
+
+```bash
+sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
+sudo ./scripts/preflight.sh                       # 公网就绪后跑完整版
+```
+
+它只读，不改任何东西。满配共 43 项，分七组；分组与判据见 `docs/RUNBOOK.md`。
+
 ## 9. 发布与回退
 
 ```bash
