@@ -120,7 +120,38 @@ sudo -u zhiyu crontab -e
 
 首次手动跑一次，确认 `backup/` 出现文件且日志无报错。异地副本可选：`ossutil cp` 到 OSS，或每周手动下载。
 
-## 8. 验收
+## 8. 部署预检
+
+前面几节有二十多处「看起来对了」，靠人眼逐条核对很容易漏。预检把 DEPLOY.md 与 RUNBOOK 里的判据变成一条命令：
+
+```bash
+cd /srv/zhiyu/app
+sudo ./scripts/preflight.sh                       # 地址从 /etc/zhiyu.env 读
+sudo ./scripts/preflight.sh --base https://zhiyu.example.com
+sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
+```
+
+它只读，不改任何东西。共 39 项，分七组：
+
+| 组 | 查什么 |
+| --- | --- |
+| A 系统与依赖 | python3 ≥ 3.8、sqlite3、curl、反向代理在跑、数据与备份目录属主是 `zhiyu` |
+| B 配置 | `/etc/zhiyu.env` 是 600 root、`ZHIYU_DB` 绝对路径且落在 `ReadWritePaths` 内、`ZHIYU_HOSTS` 不带协议端口、`ZHIYU_PUBLIC_ORIGIN` 主机名与白名单一致、`SECURE_COOKIE` 与协议匹配、有反代却 `TRUST_PROXY=0`、监听地址不是 `0.0.0.0` |
+| C 进程与回环 | systemd 单元已安装 / enabled / active、回环 `/api/health` 有响应、`version` 与 `ZHIYU_BUILD` 一致、监听绑在回环 |
+| D 公网 | 站点 200、证书剩余天数、http 跳 https、HSTS、经反代的 health、`Server` 头是否暴露实现 |
+| E 备份 | crontab 里有 `backup.sh`、48 小时内有备份、最新备份 `integrity_check` 通过 |
+| F 数据 | 库存在、WAL 模式、`runs` 是否超过保留期、`limits` 行数、`DEMO_CODE` 权限 600 |
+| G 版本 | 部署目录在哪个分支、`ZHIYU_BUILD` 与 `git describe` 是否对得上、工作区是否干净 |
+
+输出每项 `PASS` / `WARN` / `FAIL` / `SKIP`，结尾汇总。**有 `FAIL` 退出码为 1，只有 `WARN` 为 0**，所以能直接接进脚本或 CI。
+
+`SKIP` 不等于通过：读不到 `zhiyu` 用户的 crontab（要 root）、机器上没有 systemctl 时都会跳过，那几项要手动确认一次。
+
+什么时候跑：部署完第一次、交地址前、每次回退之后。
+
+本机在一套模拟主机环境上验证过两件事：配置齐全时 **0 项失败**，只留下真实存在的警告，不制造假警报（证书与明文跳转两项在无 HTTPS 的机器上记 `SKIP`）；把 `ZHIYU_DB` 改成相对路径、`ZHIYU_HOSTS` 加上端口、`PUBLIC_ORIGIN` 换成白名单外的域名、`TRUST_PROXY` 归零、`SECURE_COOKIE` 与 https 不符、`ReadWritePaths` 指错、`ZHIYU_BUILD` 与运行版本不一致，这七项各自准确报 `FAIL`，退出码 1。
+
+## 9. 验收
 
 1. `https://<域名>/` 打开，证书有效。
 2. `/api/health` 返回 200，`version` 与 tag 一致。
@@ -133,7 +164,7 @@ sudo -u zhiyu crontab -e
 9. 第 31 次读者写入返回 429，1 分钟后恢复。
 10. 回退到上一 tag 后服务可用，再切回。
 
-## 9. 发布与回退
+## 10. 发布与回退
 
 ```bash
 cd /srv/zhiyu/app
@@ -152,7 +183,7 @@ sudo systemctl restart zhiyu
 
 数据层是加法迁移，回退代码不需要回退数据库。若迁移破坏兼容，停服后用 `scripts/backup.sh` 的备份覆盖 `ZHIYU_DB` 指向的文件，再启动。
 
-## 10. 演示账号
+## 11. 演示账号
 
 ```bash
 sudo sed -i 's/^ZHIYU_DEMO=0/ZHIYU_DEMO=1/' /etc/zhiyu.env

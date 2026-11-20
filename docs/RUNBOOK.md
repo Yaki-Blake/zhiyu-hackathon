@@ -19,6 +19,29 @@ curl -s http://127.0.0.1:4173/api/health
 
 正常返回 `{"ok":true,"version":"...","db":"ok","time":...}`。`version` 与服务器上 `git describe --tags --always` 应一致。503 表示数据库不可用，先看日志。
 
+## 部署预检
+
+一条命令把 DEPLOY.md 里靠人眼核对的项跑完，只读，不改任何东西：
+
+```bash
+cd /srv/zhiyu/app
+sudo ./scripts/preflight.sh
+```
+
+39 项分七组：系统依赖、`/etc/zhiyu.env` 配置一致性、systemd 与回环健康、公网与证书、备份 cron 与最新备份完整性、数据库容量与 `runs` 留存、版本标识。
+
+结尾汇总 `通过 / 警告 / 失败 / 跳过`。**有失败退出码 1**，可以接进脚本。`SKIP` 不算通过——读不到 `zhiyu` 的 crontab（要 root）或机器上没有 systemctl 时会被跳过，那几项要手动看。
+
+常用变体：
+
+```bash
+sudo ./scripts/preflight.sh --base https://zhiyu.example.com   # 指定探测地址
+sudo ./scripts/preflight.sh --skip-net                        # 外网还没通
+sudo ./scripts/preflight.sh --env-file /tmp/test.env --unit-file /tmp/zhiyu.service   # 演练配置改动
+```
+
+什么时候跑：部署完、交地址前、每次回退后。出问题先看 `FAIL` 那几行，它直接说明是哪一步漏了。
+
 ## 日志
 
 ```bash
