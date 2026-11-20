@@ -93,6 +93,26 @@ python scripts/bench.py --concurrency 1,3,5 --n 20 --out bench.csv
 
 不放开 `ZHIYU_RATE_DEV` 会测到 429 而不是匹配。脚本会打印错误码分布，出现 429 时按提示重跑。结果同时交给 B1 记录到计划书。
 
+## 移动端视觉检查
+
+HTTP 200 不代表页面能用。窄屏下的横向溢出、按钮被压扁、文字截断只有看图才发现。
+
+```bash
+python server.py --port 4173          # 另开一个终端
+python scripts/shot.py http://127.0.0.1:4173/recover out/recover-390.png 390 844 --mobile
+python scripts/shot.py http://127.0.0.1:4173/t/<slug> out/card-320.png 320 800 --mobile
+python scripts/shot.py http://127.0.0.1:4173/ out/home-1280.png 1280 900
+```
+
+带 `--eval "js"` 可以先操作页面再截图，用来检查报错态与成功态，例如：
+
+```bash
+python scripts/shot.py http://127.0.0.1:4173/recover out/err.png 390 844 --mobile \
+  --eval "document.querySelector('#code').value='ZY-2222-2222';document.querySelector('#claim-form').requestSubmit();"
+```
+
+**不要用 `chrome --headless --window-size=390,844` 代替。** Windows 上 Chrome 有最小窗口宽度，页面实际按约 512 CSS 像素排版，得到的 PNG 只是被裁掉右边的一条——看起来像溢出，其实没坏。本脚本走 DevTools 协议设定设备指标，才是真实视口。
+
 ## 数据清理
 
 限流窗口每 10 分钟自动清理。读者反馈与访问记录按项目保留，不做自动删除。提交前如需演示库干净，重新生成演示数据即可，不要删生产库。

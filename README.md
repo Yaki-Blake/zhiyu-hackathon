@@ -65,7 +65,7 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 接口与三类匹配样例见 [API.md](API.md)。测试使用临时数据库与独立 Cookie，不写工作区的实际数据：
 
 ```powershell
-python -m unittest -v test_flow test_deploy test_matcher test_publish test_events   # 52 组单元、集成与契约测试
+python -m unittest -v test_flow test_deploy test_matcher test_publish test_events   # 53 组单元、集成与契约测试
 python scripts/accept.py                      # 30 项黑盒验收，含 403/413/429 边界
 python scripts/accept.py --base https://域名   # 对线上地址复核，会留下测试数据
 python scripts/prune.py                       # 匹配运行留存报告，--apply 才删

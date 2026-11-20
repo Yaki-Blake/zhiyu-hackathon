@@ -283,7 +283,7 @@ def seed_demo():
             version=1,
             title="用拾句核对访谈原话",
             material="一段脱敏的中文访谈文字稿",
-            steps="1. 打开示例工具\n2. 找出三句候选原话\n3. 回到逐字稿逐句核对",
+            steps="打开示例工具\n找出三句候选原话\n回到逐字稿逐句核对",
             criterion="三句都能在原稿定位，并能说明哪一句不能支持结论",
             question="哪一句原话不能支持你的结论？",
             tool=EXAMPLE["name"],

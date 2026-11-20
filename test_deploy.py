@@ -214,6 +214,19 @@ class Deploy(unittest.TestCase):
         self.assertEqual(body["db"], "ok")
         self.assertIn("version", body)
 
+    def test_demo_seed_steps_carry_no_list_markers(self):
+        """The card renderer wraps each line in <ol><li>; a prefix would show "1. 1. ..."."""
+        server.seed_demo()
+        with closing(sqlite3.connect(server.DB)) as conn:
+            steps = json.loads(conn.execute("SELECT data FROM cards").fetchone()[0])["steps"]
+        self.assertTrue(steps.strip())
+        for line in steps.splitlines():
+            self.assertNotRegex(
+                line.strip(),
+                r"^(?:\d+\s*[.、)]|[一二三四五六七八九十]+\s*[、.])",
+                f"演示步骤自带序号，前端会再编一次号：{line!r}",
+            )
+
     def test_old_schema_migrates(self):
         legacy = Path(self.tmp.name) / "legacy.sqlite3"
         with closing(sqlite3.connect(legacy)) as conn, conn:
