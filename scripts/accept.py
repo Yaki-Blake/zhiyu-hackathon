@@ -88,7 +88,7 @@ class Client:
         body = json.loads(raw.decode() or "{}") if raw else {}
         if expect is None:
             return status, body
-        assert status == expect, f"{path} 期望 {expect}，实际 {status}：{str(body)[:160]}"
+        assert status == expect, f"{path} 期望 {expect}，实际 {status}"
         return body
 
     def get_page(self, path, expect=200):
@@ -102,7 +102,8 @@ class Client:
 
 def raw_status(base, path, host):
     parts = urlsplit(base)
-    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=5)
+    client = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+    conn = client(parts.hostname, parts.port, timeout=5)
     try:
         conn.putrequest("GET", path, skip_host=True)
         conn.putheader("Host", host)
@@ -316,9 +317,9 @@ def group_recovery(base, pid, origin):
 
     def issue():
         code = origin.call("recovery", {})["code"]
-        assert len(code) == 12 and code.startswith("ZY-"), f"格式异常：{code}"
+        assert len(code) == 12 and code.startswith("ZY-"), "恢复码格式异常"
         state["code"] = code
-        return code
+        return "格式通过（不输出恢复码）"
 
     def claim():
         body = other.call("recovery/claim", {"code": state["code"].lower()})

@@ -43,7 +43,7 @@ tail -f /var/log/caddy/zhiyu.log
 /srv/zhiyu/app/scripts/restore-check.sh /srv/zhiyu/backup/zhiyu-2026-11-28-0300.sqlite3
 ```
 
-脚本把备份复制到临时目录，用 4199 端口启动独立实例，跑健康检查并打印项目、卡片、反馈数量。看到 `restore rehearsal ok` 才算通过。真实恢复时停服，把备份文件覆盖到 `ZHIYU_DB`，再启动。
+脚本从只读备份制作独立副本，在空闲回环端口启动服务，验证健康状态，并逐表比较项目、匹配、卡片、访问、反馈数量。任何不一致均返回非零状态。Windows 也可直接运行 `python scripts/dbops.py restore <备份路径>`。
 
 ## 演示码
 
@@ -76,13 +76,7 @@ sudo cat /srv/zhiyu/var/DEMO_CODE
 
 ## 回退
 
-```bash
-git checkout <上一个 tag>
-sudo systemctl restart zhiyu
-curl -s https://<域名>/api/health
-```
-
-数据兼容，无需回退数据库。若确实需要，停服后覆盖 `ZHIYU_DB` 再启动，并在群里说明影响范围与时间。
+同一数据库版本的回退，先在副本上验证旧代码能读写。退回 v1 代码时，必须配套使用升级前的 v1 备份：旧代码的 INSERT 不兼容 v2 新列。停写并保留当前库及 WAL，恢复到新目录，核对后再切换 `ZHIYU_DB`。回退会缺少备份之后的写入，先确认数据取舍；不要覆盖运行中的库。
 
 ## 压测
 

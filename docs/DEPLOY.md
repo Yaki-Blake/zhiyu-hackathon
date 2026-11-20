@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | A | 有已备案域名 | A 记录指向主机，Caddy 自动签发证书 |
 | B | 无备案域名 | 换中国香港或海外地域主机，或用其轻量应用服务器 |
-| C | 都不行 | `http://IP:4173`，`ZHIYU_SECURE_COOKIE=0`，在提交说明里注明 |
+| C | 暂无 HTTPS 入口 | 先在本机演示，公网验收标为未完成。不要公开 4173 端口。 |
 
 不要在未备案的情况下先上线再补。
 
@@ -39,16 +39,13 @@ sudo chown caddy:caddy /var/log/caddy
 
 ## 3. 代码
 
-部署的是带 B2 改动的分支，不是上游 `main`：
+从团队主仓获取代码；部署时记录经过验收的具体提交：
 
 ```bash
-sudo -u zhiyu git clone https://github.com/Yaki-Blake/zhiyu-hackathon.git /srv/zhiyu/app
+sudo -u zhiyu git clone --branch main https://github.com/kane959/zhiyu-hackathon.git /srv/zhiyu/app
 cd /srv/zhiyu/app
-sudo -u zhiyu git checkout feat/b2-deploy-foundation
-git log -1 --format='%h %s'   # 应显示 84b22de 或更新
+git rev-parse HEAD
 ```
-
-上游仓库是 `https://github.com/kane959/zhiyu-hackathon.git`，`main` 停在 `554f13e`，没有 B2 的任何改动，不要直接部署它。
 
 ## 4. 环境变量
 
@@ -107,7 +104,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ```bash
 sudo -u zhiyu crontab -e
-# 0 3 * * * /srv/zhiyu/app/scripts/backup.sh >> /var/log/zhiyu-backup.log 2>&1
+# 0 3 * * * /srv/zhiyu/app/scripts/backup.sh >> /srv/zhiyu/backup/cron.log 2>&1
 ```
 
 首次手动跑一次，确认 `backup/` 出现文件且日志无报错。异地副本可选：`ossutil cp` 到 OSS，或每周手动下载。
@@ -135,14 +132,7 @@ sudo systemctl restart zhiyu
 curl -s https://<域名>/api/health
 ```
 
-回退：
-
-```bash
-git checkout <上一个 tag>
-sudo systemctl restart zhiyu
-```
-
-数据层是加法迁移，回退代码不需要回退数据库。若迁移破坏兼容，停服后用 `scripts/backup.sh` 的备份覆盖 `ZHIYU_DB` 指向的文件，再启动。
+同一数据库版本的回退，先在副本上验证旧代码能读写。退回 v1 代码时，必须配套使用升级前的 v1 备份：旧代码的 INSERT 不兼容 v2 新列。停写并保留当前库及 WAL，恢复到新目录，核对后再切换 `ZHIYU_DB`。回退会缺少备份之后的写入，先确认数据取舍；不要覆盖运行中的库。
 
 ## 10. 演示账号
 
