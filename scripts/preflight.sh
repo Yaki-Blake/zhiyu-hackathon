@@ -88,7 +88,17 @@ if have systemctl; then
   for unit in caddy nginx; do
     if systemctl is-active --quiet "$unit" 2>/dev/null; then proxy="$unit"; break; fi
   done
-  if [ -n "$proxy" ]; then pass "A4 反向代理在运行：$proxy"; else fail "A4 caddy 与 nginx 都没有运行，TLS 终止没有着落"; fi
+  if [ -n "$proxy" ]; then pass "A4 反向代理在运行：$proxy"; else
+    # A proxy is only required for TLS. A plaintext direct-exposure deployment
+    # (no domain, http origin) deliberately has none; a permanent FAIL there
+    # would train everyone to ignore the preflight.
+    po="$(env_get ZHIYU_PUBLIC_ORIGIN || echo '')"
+    case "$po" in
+      https://*) fail "A4 公网走 HTTPS 但没有反向代理在运行，TLS 终止没有着落" ;;
+      http://*)  skip "A4 明文直连方案（$po），无需反向代理；无 TLS 是有意为之" ;;
+      *) fail "A4 caddy 与 nginx 都没有运行，TLS 终止没有着落" ;;
+    esac
+  fi
 else
   skip "A4 没有 systemctl，无法判断反向代理状态"
 fi
@@ -194,7 +204,7 @@ else
     *) fail "B6 ZHIYU_PUBLIC_ORIGIN 不以 http(s):// 开头：$ORIGIN"; ORIGIN="" ;;
   esac
   if [ -n "$ORIGIN" ]; then
-    oh="${ORIGIN#*://}"; oh="${oh%%/*}"
+    oh="${ORIGIN#*://}"; oh="${oh%%/*}"; oh="${oh%%:*}"
     if printf '%s' ",$HOSTS," | grep -q ",$oh,"; then pass "B6 ZHIYU_PUBLIC_ORIGIN $ORIGIN，主机名与 ZHIYU_HOSTS 一致"
     else fail "B6 ZHIYU_PUBLIC_ORIGIN 主机名 $oh 不在 ZHIYU_HOSTS 里，请求会 403"
     fi

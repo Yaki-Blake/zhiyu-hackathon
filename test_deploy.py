@@ -456,5 +456,82 @@ class PreflightDocs(unittest.TestCase):
                 self.assertEqual(int(value), count, f"{name} 写的项数与 preflight.sh 实际的 {count} 项不一致")
 
 
+class PreflightPlaintextOrigin(unittest.TestCase):
+    """The preflight is the last gate before a URL goes public. Two checks
+    misjudged a plaintext-IP deployment:
+
+    * B6 compared the whole `host:port` from PUBLIC_ORIGIN against a HOSTS
+      allowlist that (correctly) holds bare hosts, so every IP+port origin
+      failed with a bogus 403 warning.
+    * A4 demanded a reverse proxy unconditionally. With no domain there is no
+      TLS to terminate, so the missing proxy is intentional, not a failure.
+
+    Both are exercised by running preflight against a fake env file; no real
+    host or network is involved.
+    """
+
+    ROOT = Path(__file__).resolve().parent
+    PREFLIGHT = "scripts/preflight.sh"
+
+    def setUp(self):
+        try:
+            subprocess.run(["bash", "--version"], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("没有 bash，跳过 preflight 行为检查")
+        self.rel = Path("var") / f"pfplain-{os.getpid()}"
+        (self.ROOT / self.rel).mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, self.ROOT / self.rel, True)
+
+    def run_preflight(self, env_lines, with_fake_systemctl=False):
+        envf = self.rel / "env"
+        (self.ROOT / envf).write_bytes(("\n".join(env_lines) + "\n").encode("utf-8"))
+        environ = {k: v for k, v in os.environ.items() if not k.lower().startswith("http_proxy")}
+        bindir = self.rel / "bin"
+        bindir.mkdir(exist_ok=True)
+        # A fake systemctl that reports no active caddy/nginx, so A4 reaches
+        # its plaintext-vs-https branch instead of skipping for lack of systemctl.
+        fake = bindir / "systemctl"
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            "case \"$1\" in is-active) exit 1 ;; *) exit 0 ;; esac\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        environ["PATH"] = bindir.as_posix() + os.pathsep + environ.get("PATH", "")
+        cmd = ["bash", self.PREFLIGHT, "--skip-net",
+               "--env-file", envf.as_posix(), "--app-dir", self.rel.as_posix()]
+        return subprocess.run(cmd, cwd=self.ROOT, capture_output=True, text=True,
+                              timeout=30, env=environ)
+
+    def test_b6_accepts_origin_with_port_when_bare_host_is_allowed(self):
+        out = self.run_preflight([
+            "ZHIYU_DB=/srv/zhiyu/var/zhiyu.sqlite3",
+            "ZHIYU_PORT=4173",
+            "ZHIYU_HOSTS=localhost,47.238.166.125",
+            "ZHIYU_PUBLIC_ORIGIN=http://47.238.166.125:4173",
+            "ZHIYU_SECURE_COOKIE=0",
+        ]).stdout
+        self.assertIn("[PASS] B6", out, out)
+        self.assertNotIn("[FAIL] B6", out, "带端口的明文 origin 不该再被判成白名单不符")
+
+    def test_a4_plaintext_origin_skips_proxy_but_https_requires_it(self):
+        plain = self.run_preflight([
+            "ZHIYU_DB=/srv/zhiyu/var/zhiyu.sqlite3",
+            "ZHIYU_HOSTS=localhost,47.238.166.125",
+            "ZHIYU_PUBLIC_ORIGIN=http://47.238.166.125:4173",
+            "ZHIYU_SECURE_COOKIE=0",
+        ], with_fake_systemctl=True).stdout
+        self.assertIn("[SKIP] A4", plain, plain)
+        self.assertNotIn("[FAIL] A4", plain)
+
+        secure = self.run_preflight([
+            "ZHIYU_DB=/srv/zhiyu/var/zhiyu.sqlite3",
+            "ZHIYU_HOSTS=localhost,zhiyu.example.com",
+            "ZHIYU_PUBLIC_ORIGIN=https://zhiyu.example.com",
+            "ZHIYU_SECURE_COOKIE=1",
+        ], with_fake_systemctl=True).stdout
+        self.assertIn("[FAIL] A4", secure, "HTTPS 没有反代仍必须报失败")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
