@@ -1,0 +1,24 @@
+[Unit]
+Description=Zhiyu web app
+After=network.target
+
+[Service]
+Type=simple
+User=zhiyu
+Group=zhiyu
+WorkingDirectory=/srv/zhiyu/app
+EnvironmentFile=/etc/zhiyu.env
+# Keep stdout/stderr unbuffered so journald sees lines immediately.
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 server.py --port 4173
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/zhiyu/var
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

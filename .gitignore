@@ -10,3 +10,8 @@ __pycache__/
 *.sqlite3-wal
 *.sqlite3-shm
 /交付/*.zip
+# local nested clone of the upstream repo, not part of the app
+zhiyu-hackathon/
+# agent working notes
+.workbuddy/
+docs/accept-*.log

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>恢复工作区 · 知遇</title>
+<link rel="stylesheet" href="/recover.css">
+</head>
+<body>
+<main class="panel">
+  <h1>恢复工作区</h1>
+  <p class="lead">输入开发者恢复码，回到原来的项目和试用卡。恢复码只在生成时显示一次。</p>
+
+  <form id="claim-form" class="block">
+    <label for="code">恢复码</label>
+    <input id="code" name="code" type="text" inputmode="text" autocomplete="off"
+           spellcheck="false" placeholder="ZY-XXXX-XXXX" maxlength="13" required>
+    <button type="submit">进入工作区</button>
+  </form>
+
+  <div class="block">
+    <button id="issue" type="button" class="secondary">在当前浏览器生成恢复码</button>
+    <p class="hint">恢复码绑定当前浏览器里的工作区。生成新码后，该工作区原来的码立即失效。</p>
+  </div>
+
+  <output id="message" role="alert" class="message"></output>
+
+  <p class="back"><a href="/">返回工作台</a></p>
+</main>
+<script src="/recover.js"></script>
+</body>
+</html>

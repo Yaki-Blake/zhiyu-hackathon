@@ -1,0 +1,21 @@
+# Caddy reverse proxy for Zhiyu.
+# Replace the site address with the real domain. Caddy obtains and renews
+# Let's Encrypt certificates automatically; port 80 must stay open for HTTP-01.
+#
+# Install: cp deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
+# Log dir: mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
+
+zhiyu.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4173
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/zhiyu.log
+		format json
+	}
+}
