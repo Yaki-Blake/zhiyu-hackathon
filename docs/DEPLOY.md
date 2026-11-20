@@ -24,9 +24,11 @@
 
 不要在未备案的情况下先上线再补。
 
-**路线 C 会让读者端直接报错，必须先补前端兜底。** 2026-11-20 真机验证（小米/Android 17，浏览器直连 `http://172.31.26.77:4199`）发现：点「试跑访谈稿示例」报 `crypto.randomUUID is not a function`，页面停留原地，读者无法提交反馈。原因是 `crypto.randomUUID()` 按规范**只在 secure context（HTTPS 或 localhost）暴露**，明文 IP 访问不是安全上下文。浏览器证书无效的 HTTPS 同样不算 secure context，自签证书救不了这条路。
+**路线 C 曾让读者端直接报错，现已加前端兜底修复。** 2026-11-20 真机验证（小米/Android 17，浏览器直连 `http://172.31.26.77:4199`）发现：点「试跑访谈稿示例」报 `crypto.randomUUID is not a function`，页面停留原地，读者无法提交反馈。原因是 `crypto.randomUUID()` 按规范**只在 secure context（HTTPS 或 localhost）暴露**，明文 IP 访问不是安全上下文。浏览器证书无效的 HTTPS 同样不算 secure context，自签证书救不了这条路。
 
-走路线 C 时必须先在 `index.html` 注入一段兜底（`crypto.getRandomValues` 在任何上下文都可用），或者改用自签证书**之外**的方案（如内网穿透到已备案域名）。详见 `docs/进度与交接.md` 的「真机验证」。
+**兜底已在 `app.js` 顶部加好**（`crypto.getRandomValues` 在任何上下文都可用，仅在原生方法缺失时生效）。补丁必须放在外部脚本 `app.js` 里——CSP 是 `script-src 'self'`，往 `index.html` 写内联 `<script>` 会被拦掉。
+
+注意静态资源缓存头是 `max-age=300`。部署后若改了 `app.js`/`styles.css`，用户浏览器最多 5 分钟内仍拿旧文件；演示前应强刷一次，或给 `<script src>` 加版本查询串（后者要 F1 改 `index.html`）。这次真机验证就踩过缓存的坑。详见 `docs/进度与交接.md` 的「真机验证」。
 
 ## 2. 主机初始化
 

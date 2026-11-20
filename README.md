@@ -14,7 +14,7 @@ python server.py --open
 
 默认地址 http://127.0.0.1:4173/ 。请始终使用同一主机名与开发者浏览器，localhost 与 127.0.0.1 的 Cookie 不共享。端口冲突可用 `python server.py --port 4180 --open`。用 Ctrl+C 停止服务。直接双击 HTML 或使用静态服务器无法调用接口。
 
-要让同一网段的手机访问本机实例：`python server.py --host 0.0.0.0 --port 4199`，同时把手机要用的那个 IP 加进 `ZHIYU_HOSTS`（否则每个请求都 403）。注意这只是临时调试办法——**明文 HTTP 下前端的 `crypto.randomUUID()` 不可用，点示例按钮会报错**（详见 `docs/DEPLOY.md` 第 1 节路线 C）。
+要让同一网段的手机访问本机实例：`python server.py --host 0.0.0.0 --port 4199`，同时把手机要用的那个 IP 加进 `ZHIYU_HOSTS`（否则每个请求都 403）。明文 HTTP 下原生 `crypto.randomUUID()` 不可用，但 `app.js` 顶部已加兜底，点示例按钮不会报错（详见 `docs/DEPLOY.md` 第 1 节）。注意静态资源缓存 5 分钟，改过前端后手机要强刷才生效。
 
 1. 在工作台点 **试跑访谈稿示例**。示例工具“拾句”接收脱敏的文字访谈稿；对照两个场景的证据，查看为何推荐核对引文、排除音频转写。也可登记自己的工具。
 2. 在适配场景点 **选这个场景做卡片**。编辑材料、步骤、完成标准及反馈问题，预览并发布。发布是保存到本机，不会发帖。
@@ -67,7 +67,7 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 接口与三类匹配样例见 [API.md](API.md)。测试使用临时数据库与独立 Cookie，不写工作区的实际数据：
 
 ```powershell
-python -m unittest -v test_flow test_deploy test_matcher test_publish test_events   # 53 组单元、集成与契约测试
+python -m unittest -v test_flow test_deploy test_matcher test_publish test_events test_frontend_contract   # 57 组单元、集成与契约测试
 python scripts/accept.py                      # 30 项黑盒验收，含 403/413/429 边界
 python scripts/accept.py --base https://域名   # 对线上地址复核，会留下测试数据
 python scripts/prune.py                       # 匹配运行留存报告，--apply 才删
