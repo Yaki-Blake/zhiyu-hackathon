@@ -240,12 +240,17 @@ def init():
         migrate(conn)
 
 
+def connect_live():
+    """A missing database must return unavailable instead of creating an empty file."""
+    return sqlite3.connect(DB.resolve().as_uri() + "?mode=rw", uri=True, timeout=8)
+
+
 def seed_demo():
     """Create one demo workspace with a published card and two feedback rows.
 
     The recovery code is written to var/DEMO_CODE (mode 600) and never returned by an API.
     """
-    with closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
+    with closing(connect_live()) as conn, conn:
         if conn.execute("SELECT 1 FROM meta WHERE k='demo_owner'").fetchone():
             return
         owner, pid, slug, run_id = uid(), uid(), uid(), uid()
@@ -385,7 +390,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
         if env_flag("ZHIYU_ACCESS_LOG"):
             elapsed = int((time.time() - getattr(self, "started", time.time())) * 1000)
-            print(f"{self.command} {self.path} {code} {elapsed}ms {self.client_ip()}", file=sys.stderr, flush=True)
+            print(f"{self.command} {urlsplit(self.path).path} {code} {elapsed}ms {self.client_ip()}", file=sys.stderr, flush=True)
 
     # --- identity ----------------------------------------------------------
 
@@ -432,7 +437,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         minute = now() // 60
         key = bucket + ":" + self.client_ip()
-        with closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
+        with closing(connect_live()) as conn, conn:
             conn.execute(
                 "INSERT INTO limits VALUES(?,?,1) ON CONFLICT(k) DO UPDATE SET "
                 "n=CASE WHEN window=excluded.window THEN n+1 ELSE 1 END, window=excluded.window",
@@ -523,11 +528,11 @@ class Handler(BaseHTTPRequestHandler):
                     bucket = "dev"
                 with WRITE_LOCK:
                     self.limit(bucket)
-                    with closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
+                    with closing(connect_live()) as conn, conn:
                         conn.execute("BEGIN IMMEDIATE")
                         data = self.api(conn, path, payload, post)
             else:
-                with closing(sqlite3.connect(DB, timeout=8)) as conn:
+                with closing(connect_live()) as conn:
                     if path != "/api/health":
                         self.read_limit()
                     data = self.api(conn, path, payload, post)
@@ -565,7 +570,9 @@ class Handler(BaseHTTPRequestHandler):
     def api(self, conn, path, body, post):
         seg = path.strip("/").split("/")
         if path == "/api/health" and not post:
-            conn.execute("SELECT 1").fetchone()
+            ck(conn.execute("SELECT v FROM meta WHERE k='schema_version'").fetchone() == ("2",),
+               503, "数据库结构尚未就绪。")
+            conn.execute("SELECT id FROM projects LIMIT 0")
             return dict(ok=True, version=build_id(), db="ok", time=now())
 
         if path == "/api/workspace" and not post:
@@ -574,7 +581,8 @@ class Handler(BaseHTTPRequestHandler):
                 dict(projectId=row[0], **json.loads(row[1]))
                 for row in conn.execute("SELECT id,data FROM projects WHERE owner=? ORDER BY rowid DESC", (owner,))
             ]
-            return dict(projects=projects, example=EXAMPLE, mode="synthetic", liveStatus="not_configured")
+            demo = conn.execute("SELECT 1 FROM meta WHERE k='demo_owner' AND v=?", (owner,)).fetchone()
+            return dict(projects=projects, example=EXAMPLE, mode="synthetic", liveStatus="not_configured", demoWorkspace=bool(demo))
 
         if path == "/api/recovery" and post:
             owner = self.ident("dev", True)  # first visit to /recover must still work
