@@ -107,6 +107,21 @@ fi
 BACKUP_DIR="$(env_get ZHIYU_BACKUP_DIR || echo /srv/zhiyu/backup)"
 if [ -d "$BACKUP_DIR" ]; then pass "A6 备份目录 $BACKUP_DIR 存在"; else fail "A6 备份目录 $BACKUP_DIR 不存在，cron 会每天报错"; fi
 
+# The docs and crontab call these by path, so a lost exec bit fails silently
+# at 03:00. Git stores it, but a copy or an unzip can drop it.
+noexec=""
+for s in backup.sh restore-check.sh preflight.sh; do
+  f="$APP_DIR/scripts/$s"
+  if [ -f "$f" ] && [ ! -x "$f" ]; then noexec="${noexec:+$noexec }$s"; fi
+done
+if [ -n "$noexec" ]; then
+  fail "A7 这些脚本没有执行权限：$noexec；文档与 crontab 是直接按路径调用的"
+elif [ -d "$APP_DIR/scripts" ]; then
+  pass "A7 shell 脚本都有执行权限"
+else
+  skip "A7 找不到 $APP_DIR/scripts"
+fi
+
 # --- B. configuration ------------------------------------------------------
 group "B 配置 /etc/zhiyu.env"
 
@@ -191,6 +206,8 @@ case "$ORIGIN" in
     if [ "$SC" = "1" ]; then fail "B7 走明文 HTTP 却设了 SECURE_COOKIE=1，浏览器不会回传 Cookie，会话直接失效"
     else warn "B7 明文 HTTP 路线：Cookie 无 Secure，只在没有备案域名时接受"
     fi ;;
+  *)
+    skip "B7 ZHIYU_PUBLIC_ORIGIN 还没有可用地址，判断不了 Cookie 策略" ;;
 esac
 
 TP="$(env_get ZHIYU_TRUST_PROXY || echo '0')"

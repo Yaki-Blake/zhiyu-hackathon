@@ -51,7 +51,7 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 | 数据模型与迁移 | `docs/DATA.md` |
 | 进程与反向代理 | `deploy/zhiyu.service`、`deploy/Caddyfile`、`deploy/nginx.conf` |
 | 备份与恢复演练 | `scripts/backup.sh`、`scripts/restore-check.sh` |
-| 部署预检（主机上一条命令查 39 项，只读） | `scripts/preflight.sh` |
+| 部署预检（主机上一条命令查 40 项，只读） | `scripts/preflight.sh` |
 | 并发基准 | `scripts/bench.py` |
 | 黑盒验收 | `scripts/accept.py`，判读方法见 `docs/验收.md` |
 

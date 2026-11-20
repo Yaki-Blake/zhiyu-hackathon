@@ -131,7 +131,7 @@ sudo ./scripts/preflight.sh --base https://zhiyu.example.com
 sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
 ```
 
-它只读，不改任何东西。共 39 项，分七组：
+它只读，不改任何东西。满配共 40 项，分七组：
 
 | 组 | 查什么 |
 | --- | --- |
@@ -150,6 +150,10 @@ sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
 什么时候跑：部署完第一次、交地址前、每次回退之后。
 
 本机在一套模拟主机环境上验证过两件事：配置齐全时 **0 项失败**，只留下真实存在的警告，不制造假警报（证书与明文跳转两项在无 HTTPS 的机器上记 `SKIP`）；把 `ZHIYU_DB` 改成相对路径、`ZHIYU_HOSTS` 加上端口、`PUBLIC_ORIGIN` 换成白名单外的域名、`TRUST_PROXY` 归零、`SECURE_COOKIE` 与 https 不符、`ReadWritePaths` 指错、`ZHIYU_BUILD` 与运行版本不一致，这七项各自准确报 `FAIL`，退出码 1。
+
+A7 的执行位检查在 Windows 上无法复现失败路径：Git Bash 对 `.sh` 恒判为可执行，`chmod -x` 也不改它的 `-x` 结果。到 Linux 主机上才是准确判据。
+
+这条检查是补出来的：`backup.sh`、`restore-check.sh` 在 Git 里原本记成 644，而 crontab 和文档都是直接按路径调用 `scripts/backup.sh`，部署后 cron 会以权限不足静默失败，手动 `bash scripts/backup.sh` 却照常工作——最容易被误判成「备份没问题」。
 
 ## 9. 验收
 
