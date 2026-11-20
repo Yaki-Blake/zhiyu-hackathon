@@ -14,7 +14,7 @@
 | POST /api/projects/:id/publish | runId、candidateId、title、material、steps、criterion、question。核验归属、当前能力和候选判断后生成 slug/version。重复发布相同当前快照返回同一版本；每次发布记录来源 runId 与 candidateId，旧版本链接继续可用 |
 | GET /api/cards/:slug | 公开快照：slug、version、tool、url、scene、mode 及上面的五项卡片内容；签发读者会话 |
 | POST /api/cards/:slug/visit 或 /open | version；服务端由读者 Cookie + slug 去重；visit 返回既有 receipt 或 null |
-| POST /api/cards/:slug/feedback | version、submissionId、status=done/blocked、step、note。blocked 必填 step；同会话同版本一份，返回 receipt |
+| POST /api/cards/:slug/feedback | version、submissionId、status=done/blocked、step、note。blocked 必填 step；同会话同版本一份，返回 receipt；同一 `submissionId` 重放返回同一回执，换 `submissionId` 再提交返回 409 |
 | POST /api/projects/:id/withdraw/:slug | 空对象；撤回读者链接，保留反馈 |
 | GET /api/projects/:id/results | versions[]：slug、version、active、publishedAt、visits、opened、completed、feedback[]；按版本倒序，前端选择版本或汇总 |
 
@@ -27,6 +27,27 @@
 因此「最新版本」不是「唯一活着的版本」。看板按 `version` 倒序展示，`active` 为 false 的表示已撤回；F2 若要标注「当前推荐」，取 `versions[0]` 且 `active` 为 true 的那一条。
 
 卡片记录了它从哪来：`GET /api/projects/:id` 返回的 `cards[]` 里带 `runId`、`candidateId`、`publishedAt`，用于回查是第几次匹配、哪个候选产出的。这三个字段只给所有者，公开卡不含。
+
+### 事件与反馈的计数口径
+
+`GET /api/projects/:id/results` 的三列各算各的，互不推导：
+
+| 列 | 定义 | 说明 |
+| --- | --- | --- |
+| `visits` | `visits` 表中该 `slug` 的行数 | 每个读者会话一行，重复访问不累加 |
+| `opened` | 上述行中 `opened=1` 的数量 | 点了「打开原工具」才算；只访问不计 |
+| `completed` | `feedback` 表中该 `slug` 且 `status='done'` 的行数 | 报「卡住」不计入完成 |
+
+两条由此推出的性质，前端可以依赖：`visits ≥ opened`，且 `visits ≥ completed`（提交反馈前必先落访问行）。`feedback.length` 是具体反馈条数，包含「卡住」的那些，所以它可能大于 `completed`。
+
+提交规则：
+
+- 同一 `submissionId` 重复提交是幂等的，返回同一份 receipt，数据库只有一行。前端双击不会产生两条。
+- 换了 `submissionId` 再提交会被拒绝（409）。同一会话对同一张卡片只有一份反馈；要补交或改口，需要开发者发布新版本，反馈按版本分开记。这条是为了避免「读者以为改了、看板还是旧答案」。
+- `submissionId` 在卡片内唯一，不是会话内唯一。前端用 `crypto.randomUUID()` 生成即可，不要用递增序号，否则不同读者会撞号。
+- 已撤回的卡片不再接受 `visit`、`open`、`feedback`，一律 404；已收到的访问与反馈保留在 `results` 里，撤回不删数据。
+
+`ZHIYU_RATE_READER`（默认 30 次/分钟/IP）把 `visit`、`open`、`feedback` 合并计数。同一出口 IP 下的多个读者共用这个额度，部署时若走反向代理，务必按 `docs/DEPLOY.md` 配好 `ZHIYU_TRUST_PROXY`。
 
 ## 可复现的匹配结果
 

@@ -238,5 +238,74 @@ class Deploy(unittest.TestCase):
                 self.assertIn(name, card_columns)
 
 
+class Retention(unittest.TestCase):
+    """`runs` grows on every match request, so it is the one table needing a cap."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_db = server.DB
+        server.DB = Path(self.tmp.name) / "retention.sqlite3"
+        server.init()
+
+    def tearDown(self):
+        server.DB = self.old_db
+        self.tmp.cleanup()
+
+    def add_run(self, run_id, age_days):
+        with closing(sqlite3.connect(server.DB)) as conn, conn:
+            conn.execute(
+                "INSERT INTO runs(id,pid,rid,data,created_at) VALUES(?,?,?,?,?)",
+                (run_id, "p1", run_id, json.dumps({"status": "ok"}), server.now() - age_days * 86400),
+            )
+
+    def add_card(self, slug, run_id):
+        with closing(sqlite3.connect(server.DB)) as conn, conn:
+            conn.execute(
+                "INSERT INTO cards(slug,pid,version,signature,data,active,published_at,run_id,candidate_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (slug, "p1", 1, "sig", "{}", 1, server.now(), run_id, "c1"),
+            )
+
+    def run_ids(self):
+        with closing(sqlite3.connect(server.DB)) as conn:
+            return sorted(row[0] for row in conn.execute("SELECT id FROM runs"))
+
+    def test_old_unreferenced_runs_are_removed(self):
+        self.add_run("old", 100)
+        self.add_run("fresh", 1)
+        report = server.prune(days=90)
+        self.assertEqual(self.run_ids(), ["fresh"])
+        self.assertEqual((report["candidates"], report["deleted"], report["remaining"]), (1, 1, 1))
+
+    def test_runs_behind_a_card_are_kept_forever(self):
+        self.add_run("old", 400)
+        self.add_card("s1", "old")
+        server.prune(days=90)
+        self.assertEqual(self.run_ids(), ["old"], "已发布卡片的来源运行不能删，否则反馈追不回当时展示的内容")
+
+    def test_dry_run_deletes_nothing(self):
+        self.add_run("old", 100)
+        report = server.prune(days=90, dry_run=True)
+        self.assertEqual((report["candidates"], report["deleted"], report["dryRun"]), (1, 0, True))
+        self.assertEqual(self.run_ids(), ["old"])
+
+    def test_default_window_is_ninety_days(self):
+        self.add_run("inside", 89)
+        self.add_run("outside", 91)
+        report = server.prune()
+        self.assertEqual(report["days"], 90)
+        self.assertEqual(self.run_ids(), ["inside"])
+
+    def test_pruning_leaves_counts_alone(self):
+        self.add_run("old", 200)
+        with closing(sqlite3.connect(server.DB)) as conn, conn:
+            conn.execute("INSERT INTO visits(slug,reader,opened,first_seen) VALUES('s1','r1',1,1)")
+            conn.execute("INSERT INTO feedback VALUES('s1','r1','sid','done','','ok',1)")
+        server.prune(days=90)
+        with closing(sqlite3.connect(server.DB)) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM visits").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT count(*) FROM feedback").fetchone()[0], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

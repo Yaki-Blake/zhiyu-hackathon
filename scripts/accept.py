@@ -291,6 +291,13 @@ def group_events(base, state):
         assert len(block["feedback"]) == 1, f"feedback={len(block['feedback'])}，期望 1"
         return "visits=2 opened=1 completed=1"
 
+    def second_answer_rejected():
+        reader.call(
+            "cards/" + slug + "/feedback",
+            {"version": 1, "submissionId": "accept-sub-9", "status": "blocked", "step": "第二步", "note": "改口"},
+            expect=409,
+        )
+
     def version_guard():
         reader.call(f"cards/{slug}/visit", {"version": 99}, expect=409)
 
@@ -300,6 +307,7 @@ def group_events(base, state):
 
     check("重复 visit/open 不重复计数", events)
     check("反馈提交幂等并返回回执", feedback)
+    check("同会话换 submissionId → 409", second_answer_rejected)
     check("blocked 缺步骤 → 400", blocked_needs_step)
     check("看板四项统计对得上", stats)
     check("版本不符 → 409", version_guard)

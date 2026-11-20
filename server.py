@@ -208,6 +208,31 @@ def migrate(conn):
         conn.execute(statement)
 
 
+def prune(days=None, dry_run=False):
+    """Drop match runs that are old and not referenced by any published card.
+
+    `runs` is the only table that grows without a deliberate user action: every
+    match request stores a full candidate list plus a project snapshot. Runs that
+    a card points at are kept forever, because `cards.run_id` is the only path
+    from a reader's feedback back to the candidates they were shown.
+
+    Visits and feedback are never pruned: they are the numbers the results board
+    reports, and deleting rows would silently rewrite past totals.
+    """
+    limit = max(1, int(days if days is not None else env_int("ZHIYU_RUN_RETENTION_DAYS", 90)))
+    cutoff = now() - limit * 86400
+    stale = "created_at<? AND id NOT IN (SELECT run_id FROM cards WHERE run_id<>'')"
+    with closing(sqlite3.connect(DB, timeout=8)) as conn:
+        candidates = conn.execute(f"SELECT count(*) FROM runs WHERE {stale}", (cutoff,)).fetchone()[0]
+        total = conn.execute("SELECT count(*) FROM runs").fetchone()[0]
+        if dry_run or not candidates:
+            return dict(days=limit, cutoff=cutoff, candidates=candidates, deleted=0, remaining=total, dryRun=dry_run)
+        conn.execute("BEGIN IMMEDIATE")
+        deleted = conn.execute(f"DELETE FROM runs WHERE {stale}", (cutoff,)).rowcount
+        conn.commit()
+    return dict(days=limit, cutoff=cutoff, candidates=candidates, deleted=deleted, remaining=total - deleted, dryRun=False)
+
+
 def init():
     DB.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(DB)) as conn, conn:
@@ -729,13 +754,28 @@ class Handler(BaseHTTPRequestHandler):
                         400,
                         "请注明卡住的步骤。",
                     )
+                    previous = conn.execute(
+                        "SELECT sid,status FROM feedback WHERE slug=? AND reader=?", (slug, reader)
+                    ).fetchone()
+                    # A second answer under a new submissionId must not be dropped
+                    # silently: inserting would be ignored by the primary key while
+                    # the caller still receives 200, so the reader believes the new
+                    # answer was recorded and the board keeps showing the old one.
+                    ck(
+                        previous is None or previous[0] == item["submissionId"],
+                        409,
+                        "这张卡片已提交过反馈，不能再次提交。",
+                    )
                     conn.execute(
                         "INSERT OR IGNORE INTO feedback VALUES(?,?,?,?,?,?,?)",
                         (slug, reader, item["submissionId"], item["status"], item["step"], item["note"], now()),
                     )
                 receipt = conn.execute("SELECT sid,status FROM feedback WHERE slug=? AND reader=?", (slug, reader)).fetchone()
                 if seg[3] == "feedback":
-                    ck(receipt, 409, "提交 ID 已使用，请刷新后重试。")
+                    # Reaching here without a row means the id collided with another
+                    # reader's submission; the insert was ignored, so say so instead
+                    # of returning an empty receipt as success.
+                    ck(receipt, 409, "提交 ID 已被其他会话使用，请刷新后重试。")
                 return dict(receipt=dict(submissionId=receipt[0], status=receipt[1]) if receipt else None)
 
         raise Problem(404, "接口不存在。")

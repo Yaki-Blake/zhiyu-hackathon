@@ -96,7 +96,9 @@
 2. 快照不可变：`cards.data` 发布后只读，撤回只改 `active`；新旧版本并存，不互相覆盖。
 3. 版本单调：新版本为项目内最大值加一。
 4. 幂等：同 `(pid,rid)` 返回原运行，但 `mode` 变了返回 409；同内容重复发布返回原版本；同 `(slug,sid)` 只落一条反馈。
-5. 计数：访问数 = `visits` 行数；进入工具数 = `opened=1` 行数；完成数 = `feedback.status='done'` 行数。
+5. 反馈唯一：同 `(slug,reader)` 只有一行。同 `submissionId` 重放返回原回执（200），换 `submissionId` 再提交返回 409，不做覆盖。
+6. 计数：访问数 = `visits` 行数；进入工具数 = `opened=1` 行数；完成数 = `feedback.status='done'` 行数。`visits ≥ opened` 且 `visits ≥ completed` 恒成立。
+7. 撤回：卡片 `active=0` 后不再接受新事件（404），但 `visits` 与 `feedback` 原样保留，`results` 仍统计该 `slug`。
 
 ## 迁移
 
@@ -121,3 +123,13 @@
 ## 容量
 
 单条约 1 KB，一万条约 10 MB。SQLite 单进程写者，当前实测 5 并发写 p95 约 150 ms。持续写超过 20 次/秒再评估迁移。
+
+`runs` 是唯一会自己长大的表：每次匹配都写一条，内含完整候选列表与项目快照，实测单条 3 至 6 KB，是其他表的数倍。因此单独设留存策略：
+
+| 对象 | 策略 | 理由 |
+| --- | --- | --- |
+| `runs` 未被卡片引用且超过 90 天 | 可删 | 只用于回看历史草稿，过期无价值 |
+| `runs` 被 `cards.run_id` 引用 | 永久保留 | 反馈要能追回当时展示的候选，删了链路就断 |
+| `projects`、`cards`、`visits`、`feedback`、`recovery`、`limits` | 不自动删 | 前三者是业务数据与计数口径；`limits` 由限流逻辑按 10 分钟窗口自清 |
+
+执行：`python scripts/prune.py` 先看会删几条，确认后 `--apply`。默认窗口 90 天，可用 `--days` 或 `ZHIYU_RUN_RETENTION_DAYS` 调整。窗口设为零以下没有意义，`prune` 会按 1 天处理。

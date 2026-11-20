@@ -97,6 +97,21 @@ python scripts/bench.py --concurrency 1,3,5 --n 20 --out bench.csv
 
 限流窗口每 10 分钟自动清理。读者反馈与访问记录按项目保留，不做自动删除。提交前如需演示库干净，重新生成演示数据即可，不要删生产库。
 
+匹配运行（`runs`）需要定期清理，因为它每次匹配都写一条且体积最大。安全规则：被已发布卡片引用的运行永远不删（反馈要靠它追溯当时展示的内容），访问与反馈计数也一行不动。
+
+```bash
+python scripts/prune.py            # 只看会删几条，默认保留 90 天
+python scripts/prune.py --apply    # 真的删
+```
+
+建议每周一次，放在夜间备份之后：
+
+```cron
+30 4 * * 0 /srv/zhiyu/app/scripts/prune.py --apply >> /var/log/zhiyu-prune.log 2>&1
+```
+
+先跑一次不带 `--apply` 的，把 `candidates` 数字和备份日志对一下再挂 cron。
+
 ## 发布记录
 
 | 日期 | 版本 | 操作人 | 结果 |
