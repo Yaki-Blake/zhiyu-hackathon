@@ -351,6 +351,10 @@ def tool_url(value):
 class Handler(BaseHTTPRequestHandler):
     server_version = "Zhiyu/1"
 
+    def version_string(self):
+        # Do not advertise the interpreter version in every response.
+        return self.server_version
+
     def log_message(self, *args):
         pass
 
@@ -448,11 +452,50 @@ class Handler(BaseHTTPRequestHandler):
                 READ_WINDOWS.pop(stale, None)
         ck(READ_WINDOWS[key] <= rate_cap("read"), 429, "请求过于频繁，请稍后重试。")
 
+    def drain_body(self):
+        """Consume an unread request body before replying with an early 4xx.
+
+        Without this the server answers while the client is still writing a
+        large body. On real networks that socket can be reset before the
+        response lands, so the client sees IncompleteRead instead of the
+        intended 413/415/403. Read at most 1 MiB so a bogus Content-Length
+        cannot pin a worker; give up and close the connection past that.
+        """
+        if getattr(self, "_body_consumed", True):
+            return
+        self._body_consumed = True
+        try:
+            remaining = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.close_connection = True
+            return
+        if remaining <= 0:
+            return
+        target = min(remaining, 1024 * 1024)
+        previous = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(2)
+            while target > 0:
+                block = self.rfile.read(min(64 * 1024, target))
+                if not block:
+                    break
+                target -= len(block)
+        except OSError:
+            self.close_connection = True
+        finally:
+            try:
+                self.connection.settimeout(previous)
+            except OSError:
+                pass
+        if target > 0:
+            self.close_connection = True
+
     # --- entry points ------------------------------------------------------
 
     def handle_req(self, post=False):
         self.pending = []
         self.started = time.time()
+        self._body_consumed = not post
         try:
             host = self.headers.get("Host", "")
             ck(host.split(":")[0].lower() in allowed_hosts(), 403, "当前访问地址不在允许的域名列表内。")
@@ -466,6 +509,7 @@ class Handler(BaseHTTPRequestHandler):
                 ck(self.headers.get_content_type() == "application/json", 415, "需要 JSON 请求。")
                 length = int(self.headers.get("Content-Length", "0"))
                 ck(0 < length <= 24000, 413, "请求内容过大或为空。")
+                self._body_consumed = True
                 payload = json.loads(self.rfile.read(length))
                 ck(isinstance(payload, dict), 400, "请求格式不正确。")
             elif not path.startswith("/api/"):
@@ -489,6 +533,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.api(conn, path, payload, post)
             self.respond(200, data)
         except Problem as exc:
+            self.drain_body()
             self.respond(exc.code, {"error": exc.msg})
         except (ValueError, UnicodeError):
             self.respond(400, {"error": "请求格式不正确。"})
