@@ -19,7 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fixtures import EXAMPLE, SOURCES, rank
+from fixtures import EXAMPLE, SOURCES
+from matcher import run as match_run
 
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ.get("ZHIYU_DB", ROOT / "var" / "zhiyu.sqlite3"))
@@ -528,14 +529,14 @@ class Handler(BaseHTTPRequestHandler):
                     return json.loads(row[0])
                 mode = body.get("mode", "synthetic")
                 ck(mode in ("synthetic", "live"), 400, "未知模式。")
-                items = rank(project) if mode == "synthetic" else []
+                outcome = match_run(project, mode)
                 run = dict(
                     runId=uid(),
                     requestId=rid,
                     mode=mode,
-                    status=("success" if items else "empty") if mode == "synthetic" else "failed",
-                    errorCode=None if mode == "synthetic" else "not_configured",
-                    candidates=items,
+                    status=outcome["status"],
+                    errorCode=outcome["errorCode"],
+                    candidates=outcome["candidates"],
                     projectSnapshot=project,
                 )
                 conn.execute(

@@ -58,14 +58,14 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 | --- | --- | --- |
 | F1 开发者工作台 | app.js 的 home / edit / match / cardEditor | 用实际工具和长文本复核；可在侧栏链接 `/recover` |
 | F2 读者与看板 | drawReader / feedbackForm / dashboard | 开展手机真人试用 |
-| B1 场景筛选 | fixtures.py 的 SOURCES / rank | 接官方授权检索和模型；保留真实证据与失败状态 |
+| B1 场景筛选 | `matcher.py` 的 `run()`（当前委托 `fixtures.rank`） | 替换 `run()` 实现接官方授权检索和模型；保留真实证据与失败状态，契约见文件头与 `test_matcher.py` |
 | B2 数据与发布 | server.py、API.md、docs/、deploy/、scripts/ | 等 P 提供主机与域名后执行部署 |
 | P 产品验证 | 上面的四步脚本 | 获取真实授权样本和试用反馈，核对站内分享入口 |
 
 接口与三类匹配样例见 [API.md](API.md)。测试使用临时数据库与独立 Cookie，不写工作区的实际数据：
 
 ```powershell
-python -m unittest -v test_flow test_deploy   # 14 组单元与集成
+python -m unittest -v test_flow test_deploy test_matcher   # 21 组单元、集成与契约测试
 python scripts/accept.py                      # 27 项黑盒验收，含 403/413/429 边界
 python scripts/accept.py --base https://域名   # 对线上地址复核，会留下测试数据
 ```
