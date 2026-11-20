@@ -110,14 +110,14 @@ if [ -d "$BACKUP_DIR" ]; then pass "A6 备份目录 $BACKUP_DIR 存在"; else fa
 # The docs and crontab call these by path, so a lost exec bit fails silently
 # at 03:00. Git stores it, but a copy or an unzip can drop it.
 noexec=""
-for s in backup.sh restore-check.sh preflight.sh; do
+for s in backup.sh restore-check.sh preflight.sh watch.sh prune.py; do
   f="$APP_DIR/scripts/$s"
   if [ -f "$f" ] && [ ! -x "$f" ]; then noexec="${noexec:+$noexec }$s"; fi
 done
 if [ -n "$noexec" ]; then
   fail "A7 这些脚本没有执行权限：$noexec；文档与 crontab 是直接按路径调用的"
 elif [ -d "$APP_DIR/scripts" ]; then
-  pass "A7 shell 脚本都有执行权限"
+  pass "A7 脚本都有执行权限"
 else
   skip "A7 找不到 $APP_DIR/scripts"
 fi
@@ -340,16 +340,25 @@ else
 fi
 
 # --- E. backups ------------------------------------------------------------
-group "E 备份"
+group "E 备份与定时任务"
 
+# Read the crontab once; every scheduled-job check below works off this text.
+# CRON_READ separates "installed but empty" (a real failure) from "cannot read
+# without root" (a skip, and the next person must look by hand).
+CRON=""
+CRON_READ=0
 if [ -f "/var/spool/cron/crontabs/zhiyu" ]; then
-  if grep -q 'backup.sh' "/var/spool/cron/crontabs/zhiyu" 2>/dev/null; then pass "E1 zhiyu 的 crontab 里有 backup.sh"
-  else fail "E1 zhiyu 的 crontab 里没有 backup.sh，不会自动备份"
-  fi
-elif have crontab && crontab -l -u zhiyu 2>/dev/null | grep -q 'backup.sh'; then
-  pass "E1 zhiyu 的 crontab 里有 backup.sh"
+  CRON="$(cat "/var/spool/cron/crontabs/zhiyu" 2>/dev/null)"; CRON_READ=1
+elif have crontab; then
+  if CRON="$(crontab -l -u zhiyu 2>/dev/null)"; then CRON_READ=1; fi
+fi
+
+if [ "$CRON_READ" != "1" ]; then
+  skip "E1/E4-E6 读不到 zhiyu 的 crontab（需要 root），手动确认：crontab -u zhiyu -l"
+elif printf '%s' "$CRON" | grep -q 'backup.sh'; then
+  pass "E1 定时任务里有 backup.sh"
 else
-  skip "E1 读不到 zhiyu 的 crontab（需要 root），手动确认：crontab -u zhiyu -l"
+  fail "E1 定时任务里没有 backup.sh，不会自动备份"
 fi
 
 if [ -d "$BACKUP_DIR" ]; then
@@ -371,6 +380,39 @@ if [ -d "$BACKUP_DIR" ]; then
   fi
 else
   skip "E2-E3 备份目录不存在"
+fi
+
+# A backup nobody checks is a backup nobody has; a watch nobody alerts to is the
+# same. These three look at the scheduled jobs that only exist after cron is
+# installed, which is the step most often skipped on deployment day.
+if [ "$CRON_READ" = "1" ]; then
+  wline="$(printf '%s' "$CRON" | grep 'watch.sh' | grep -v -e '--integrity' | head -1)"
+  if [ -n "$wline" ]; then
+    pass "E4 定时任务里有探活 watch.sh"
+  else
+    fail "E4 定时任务里没有 watch.sh，服务挂了没人知道；照 deploy/crontab 装一份"
+    skip "E5-E6 没有探活行，地址与告警渠道无从判断"
+  fi
+
+  if [ -n "$wline" ]; then
+    wurl="$(printf '%s' "$wline" | sed -n 's/.*--url[= ]\{1,\}\([^ ]*\).*/\1/p')"
+    case "$wurl" in
+      "") warn "E5 探活没写 --url，只探回环；反代或证书挂了不会算作故障" ;;
+      *example.com*|*example.org*|*example.net*) fail "E5 探活地址还是占位域名 $wurl，装到主机前换成真实地址" ;;
+      http://127.0.0.1*|http://localhost*) warn "E5 探活只打回环（$wurl），反代或证书挂了不会告警" ;;
+      https://*) pass "E5 探活走公网 https：$wurl" ;;
+      http://*) warn "E5 探活走明文 http：$wurl；没有备案域名时可以接受，有域名就改 https" ;;
+      *) warn "E5 认不出探活地址：$wurl" ;;
+    esac
+
+    if printf '%s' "$CRON" | grep -q 'notify'; then
+      pass "E6 告警挂了通知渠道"
+    elif printf '%s' "$CRON" | grep -qE '^[[:space:]]*MAILTO=[^"[:space:]]'; then
+      pass "E6 告警走 cron 邮件（MAILTO 非空）"
+    else
+      warn "E6 告警只写本地日志：既没有 --notify，MAILTO 也是空的；演示周内出问题没人会收到"
+    fi
+  fi
 fi
 
 # --- F. data and capacity --------------------------------------------------

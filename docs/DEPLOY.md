@@ -111,14 +111,40 @@ sudo certbot --nginx -d zhiyu.example.com
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-## 7. 备份
+## 7. 备份、探活与定时任务
+
+定时任务固化在 `deploy/crontab`，不要再手写 `crontab -e`——手写的条目没人复核，`backup.sh` 漏掉执行位这类问题就是这么来的。
 
 ```bash
-sudo -u zhiyu crontab -e
-# 0 3 * * * /srv/zhiyu/app/scripts/backup.sh >> /var/log/zhiyu-backup.log 2>&1
+cd /srv/zhiyu/app
+sudo cp deploy/crontab /tmp/zhiyu.crontab    # 先在临时副本上改，改坏了不影响仓库
+sudo editor /tmp/zhiyu.crontab               # 把 watch.sh 的 --url 换成真实地址
+sudo crontab -u zhiyu /tmp/zhiyu.crontab
+sudo crontab -u zhiyu -l                     # 核对四条都在
 ```
 
-首次手动跑一次，确认 `backup/` 出现文件且日志无报错。异地副本可选：`ossutil cp` 到 OSS，或每周手动下载。
+注意 `crontab -u zhiyu <file>` 会**整份替换**该用户的 crontab，所以这份文件必须是唯一来源。
+
+| 时间 | 任务 | 作用 |
+| --- | --- | --- |
+| 每日 03:00 | `backup.sh` | WAL 安全的 `.backup`，并对副本做完整性检查 |
+| 每 5 分钟 | `watch.sh --url https://<域名>/api/health` | 探活，连续 3 次失败告警一次，恢复再告警一次 |
+| 每周日 04:10 | `watch.sh --integrity` | 线上库 `PRAGMA integrity_check` |
+| 每周日 04:30 | `prune.py --apply` | 清理超出保留期的匹配运行 |
+
+首次手动各跑一次，确认行为：
+
+```bash
+sudo -u zhiyu /srv/zhiyu/app/scripts/backup.sh
+sudo -u zhiyu /srv/zhiyu/app/scripts/watch.sh --url https://<域名>/api/health --verbose
+sudo -u zhiyu /srv/zhiyu/app/scripts/watch.sh --integrity --verbose
+```
+
+第一条应打印 `backup ok:`，后两条应打印 `ok: http=200` 与 `integrity ok:`。`watch.sh` 的输出同时写进 `var/watch.log`。
+
+告警去向要显式配一个：默认 crontab 里 `MAILTO=""` 且没有 `--notify`，告警只会落在 `var/watch.log` 与 `var/watch.out`，夜里出事没人会看到。配法见 `docs/RUNBOOK.md` 的「监控与告警」；预检 E6 会在两种渠道都没有时报 `WARN`。
+
+异地副本可选：`ossutil cp` 到 OSS，或每周手动下载。
 
 ## 8. 部署预检
 
@@ -131,15 +157,15 @@ sudo ./scripts/preflight.sh --base https://zhiyu.example.com
 sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
 ```
 
-它只读，不改任何东西。满配共 40 项，分七组：
+它只读，不改任何东西。满配共 43 项，分七组：
 
 | 组 | 查什么 |
 | --- | --- |
-| A 系统与依赖 | python3 ≥ 3.8、sqlite3、curl、反向代理在跑、数据与备份目录属主是 `zhiyu` |
+| A 系统与依赖 | python3 ≥ 3.8、sqlite3、curl、反向代理在跑、数据与备份目录属主是 `zhiyu`、五个脚本带执行位 |
 | B 配置 | `/etc/zhiyu.env` 是 600 root、`ZHIYU_DB` 绝对路径且落在 `ReadWritePaths` 内、`ZHIYU_HOSTS` 不带协议端口、`ZHIYU_PUBLIC_ORIGIN` 主机名与白名单一致、`SECURE_COOKIE` 与协议匹配、有反代却 `TRUST_PROXY=0`、监听地址不是 `0.0.0.0` |
 | C 进程与回环 | systemd 单元已安装 / enabled / active、回环 `/api/health` 有响应、`version` 与 `ZHIYU_BUILD` 一致、监听绑在回环 |
 | D 公网 | 站点 200、证书剩余天数、http 跳 https、HSTS、经反代的 health、`Server` 头是否暴露实现 |
-| E 备份 | crontab 里有 `backup.sh`、48 小时内有备份、最新备份 `integrity_check` 通过 |
+| E 备份与定时任务 | crontab 里有 `backup.sh` 与 `watch.sh`、48 小时内有备份、最新备份 `integrity_check` 通过、探活地址不是占位域名、告警有去向（`--notify` 或 `MAILTO`） |
 | F 数据 | 库存在、WAL 模式、`runs` 是否超过保留期、`limits` 行数、`DEMO_CODE` 权限 600 |
 | G 版本 | 部署目录在哪个分支、`ZHIYU_BUILD` 与 `git describe` 是否对得上、工作区是否干净 |
 
@@ -150,6 +176,8 @@ sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
 什么时候跑：部署完第一次、交地址前、每次回退之后。
 
 本机在一套模拟主机环境上验证过两件事：配置齐全时 **0 项失败**，只留下真实存在的警告，不制造假警报（证书与明文跳转两项在无 HTTPS 的机器上记 `SKIP`）；把 `ZHIYU_DB` 改成相对路径、`ZHIYU_HOSTS` 加上端口、`PUBLIC_ORIGIN` 换成白名单外的域名、`TRUST_PROXY` 归零、`SECURE_COOKIE` 与 https 不符、`ReadWritePaths` 指错、`ZHIYU_BUILD` 与运行版本不一致，这七项各自准确报 `FAIL`，退出码 1。
+
+定时任务那三项（E4 至 E6）用假 `crontab` 命令喂了四份不同的 crontab 验证：完整一份全过；去掉 `watch.sh` 行时 E4 报 `FAIL`、E5/E6 记 `SKIP`，不重复报同一条缺失；探活地址留着 `zhiyu.example.com` 时 E5 报 `FAIL`；只有回环地址时 E5 报 `WARN` 而不是 `FAIL`——单机演示可以接受，有域名就不该这样。空 crontab 与「读不到 crontab」分开判定：前者是装漏了，报 `FAIL`；后者权限不足，记 `SKIP` 并提示人工确认。
 
 A7 的执行位检查在 Windows 上无法复现失败路径：Git Bash 对 `.sh` 恒判为可执行，`chmod -x` 也不改它的 `-x` 结果。到 Linux 主机上才是准确判据。
 

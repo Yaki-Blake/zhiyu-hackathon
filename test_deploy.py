@@ -8,7 +8,9 @@ import http.client
 import http.cookiejar
 import json
 import os
+import re
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -318,6 +320,44 @@ class Retention(unittest.TestCase):
         with closing(sqlite3.connect(server.DB)) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM visits").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT count(*) FROM feedback").fetchone()[0], 1)
+
+
+class ScheduledJobs(unittest.TestCase):
+    """`deploy/crontab` is a call-by-path contract.
+
+    A renamed script or a lost exec bit fails silently at 03:00 while the same
+    command works by hand in `bash scripts/x.sh` — that is exactly how the
+    backups went missing once. These two checks run before deployment instead of
+    depending on someone remembering to run the preflight on the host.
+    """
+
+    ROOT = Path(__file__).resolve().parent
+
+    def crontab_refs(self):
+        text = (self.ROOT / "deploy" / "crontab").read_text(encoding="utf-8")
+        return sorted(set(re.findall(r"/srv/zhiyu/app/((?:scripts|deploy)/[\w.-]+)", text)))
+
+    def test_crontab_calls_only_files_that_exist(self):
+        refs = self.crontab_refs()
+        self.assertIn("scripts/backup.sh", refs, "crontab 里至少要有一条备份任务")
+        missing = [r for r in refs if not (self.ROOT / r).is_file()]
+        self.assertEqual(missing, [], f"crontab 引用了不存在的文件：{missing}")
+
+    def test_scheduled_scripts_are_executable_in_git(self):
+        refs = [r for r in self.crontab_refs() if r.endswith(".sh") or r.endswith(".py")]
+        self.assertTrue(refs, "crontab 里没有可执行脚本")
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "-s", *refs],
+                cwd=self.ROOT, capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("没有 git，跳过执行位检查")
+        if out.returncode != 0 or not out.stdout.strip():
+            self.skipTest("不在 git 仓库里，跳过执行位检查")
+        modes = {line.split("\t")[-1]: line.split()[0] for line in out.stdout.strip().splitlines()}
+        not_exec = [name for name, mode in modes.items() if mode != "100755"]
+        self.assertEqual(not_exec, [], f"这些脚本在 git 里不是 755，cron 按路径调用会静默失败：{not_exec}")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ cd /srv/zhiyu/app
 sudo ./scripts/preflight.sh
 ```
 
-40 项分七组：系统依赖、`/etc/zhiyu.env` 配置一致性、systemd 与回环健康、公网与证书、备份 cron 与最新备份完整性、数据库容量与 `runs` 留存、版本标识。
+43 项分七组：系统依赖、`/etc/zhiyu.env` 配置一致性、systemd 与回环健康、公网与证书、备份与定时任务（含探活是否挂上）、数据库容量与 `runs` 留存、版本标识。
 
 结尾汇总 `通过 / 警告 / 失败 / 跳过`。**有失败退出码 1**，可以接进脚本。`SKIP` 不算通过——读不到 `zhiyu` 的 crontab（要 root）或机器上没有 systemctl 时会被跳过，那几项要手动看。
 
@@ -59,6 +59,45 @@ tail -f /var/log/caddy/zhiyu.log
 ```
 
 输出 `backup ok: ...` 表示备份通过完整性检查。保留 14 天。不要用 `cp` 复制运行中的数据库文件，WAL 模式下会拿到不完整副本。
+
+## 监控与告警
+
+`watch.sh` 每 5 分钟由 cron 调一次，探测 `/api/health`，同时看磁盘余量。
+
+```bash
+sudo -u zhiyu /srv/zhiyu/app/scripts/watch.sh --url https://<域名>/api/health --verbose
+sudo -u zhiyu /srv/zhiyu/app/scripts/watch.sh --integrity --verbose   # 线上库完整性
+sudo -u zhiyu /srv/zhiyu/app/scripts/watch.sh --reset                  # 清状态
+```
+
+行为约定，照着它看日志：
+
+- 单次失败**不报**，连续 3 次才报一次；继续失败不重复报，避免整晚刷屏。
+- 恢复时补一条「已恢复」，附中断时长。中断时长由第一次失败的时间戳算。
+- `503` 单独判定：进程活着但数据库不可用，告警文案直接指向 `df -h` 与 `--integrity`。
+- 磁盘低于 20%（`--disk-min` 可调）报一次，回到阈值以上记一次恢复。磁盘不做三次去抖——它不会自己好。
+- 状态存在 `var/watch.state`，日志写 `var/watch.log`。计划内维护前跑一次 `--reset`，免得维护结束收到一条「已恢复」。
+
+告警去向：默认只写日志。要有推送，写一个三行脚本并让 cron 带上 `--notify`：
+
+```bash
+# /srv/zhiyu/var/notify.sh  (chmod 750)
+#!/usr/bin/env bash
+msg="$(cat)"
+curl -sS -X POST '<钉钉或企业微信机器人 webhook>' \
+  -H 'Content-Type: application/json' \
+  -d "{\"msgtype\":\"text\",\"text\":{\"content\":$(printf '%s' "$msg" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}}"
+```
+
+然后把 crontab 里的探活行改成：
+
+```cron
+*/5 * * * * /srv/zhiyu/app/scripts/watch.sh --url https://<域名>/api/health --notify /srv/zhiyu/var/notify.sh >> /srv/zhiyu/var/watch.out 2>&1
+```
+
+`ZHIYU_NOTIFY_CMD` 环境变量等价于 `--notify`。没有推送渠道时把 `MAILTO` 设成真实邮箱，至少留下一条可追溯的邮件；两者都没有，预检 E6 会报 `WARN`。
+
+每周的 `--integrity` 只是把故障提前发现；真正损坏时的处置顺序是：停服 → 用最近备份跑 `restore-check.sh` → 确认计数 → 覆盖 `ZHIYU_DB` → 启动。
 
 ## 恢复演练（每周一次）
 
