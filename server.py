@@ -790,20 +790,24 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=env_int("ZHIYU_PORT", 4173))
+    parser.add_argument("--host", default=env("ZHIYU_HOST", "127.0.0.1"),
+                        help="监听地址。默认只听回环，前面由 Caddy/nginx 反代；"
+                             "需要同网段直连时改成 0.0.0.0，并把该网段写进 ZHIYU_HOSTS。")
     parser.add_argument("--open", action="store_true")
     args = parser.parse_args()
+    shown = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
     init()
     if env_flag("ZHIYU_DEMO"):
         seed_demo()
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
     except OSError as exc:
         if args.open:
             import urllib.request
             import webbrowser
 
             try:
-                base = f"http://127.0.0.1:{args.port}"
+                base = f"http://{shown}:{args.port}"
                 with urllib.request.urlopen(base + "/api/workspace", timeout=2) as resp:
                     same = json.load(resp).get("example") == EXAMPLE
                 if same:
@@ -815,8 +819,8 @@ def main():
     if args.open:
         import webbrowser
 
-        webbrowser.open(f"http://127.0.0.1:{server.server_port}/")
-    print(f"Zhiyu: http://127.0.0.1:{server.server_port}/ build={build_id()}", flush=True)
+        webbrowser.open(f"http://{shown}:{server.server_port}/")
+    print(f"Zhiyu: http://{shown}:{server.server_port}/ build={build_id()}", flush=True)
     server.serve_forever()
 
 
