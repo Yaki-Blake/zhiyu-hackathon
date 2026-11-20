@@ -30,7 +30,7 @@ PID=$!
 
 ready=0
 for _ in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+  if curl -fsS --noproxy '*' "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
     ready=1
     break
   fi
@@ -38,7 +38,7 @@ for _ in $(seq 1 30); do
 done
 [ "$ready" = "1" ] || { echo "restored instance did not start" >&2; cat "$WORK/server.log" >&2; exit 1; }
 
-echo "health: $(curl -fsS "http://127.0.0.1:$PORT/api/health")"
+echo "health: $(curl -fsS --noproxy '*' "http://127.0.0.1:$PORT/api/health")"
 echo "projects: $(sqlite3 "$RESTORED" 'select count(*) from projects;')"
 echo "cards:    $(sqlite3 "$RESTORED" 'select count(*) from cards;')"
 echo "feedback: $(sqlite3 "$RESTORED" 'select count(*) from feedback;')"

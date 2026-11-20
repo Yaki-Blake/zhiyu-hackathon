@@ -23,15 +23,21 @@ APP_DIR="/srv/zhiyu/app"
 BASE=""
 SKIP_NET=0
 
+# `shift 2` on a trailing option with no value consumes nothing and the parse
+# loop spins forever; a typo on the host would hang the check instead of failing.
+need_value() {
+  [ "$2" -ge 2 ] || { echo "option $1 needs a value" >&2; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base) BASE="${2:-}"; shift 2 ;;
+    --base) need_value "$1" "$#"; BASE="$2"; shift 2 ;;
     --base=*) BASE="${1#*=}"; shift ;;
-    --env-file) ENVFILE="${2:-}"; shift 2 ;;
+    --env-file) need_value "$1" "$#"; ENVFILE="$2"; shift 2 ;;
     --env-file=*) ENVFILE="${1#*=}"; shift ;;
-    --unit-file) UNIT="${2:-}"; shift 2 ;;
+    --unit-file) need_value "$1" "$#"; UNIT="$2"; shift 2 ;;
     --unit-file=*) UNIT="${1#*=}"; shift ;;
-    --app-dir) APP_DIR="${2:-}"; shift 2 ;;
+    --app-dir) need_value "$1" "$#"; APP_DIR="$2"; shift 2 ;;
     --app-dir=*) APP_DIR="${1#*=}"; shift ;;
     --skip-net) SKIP_NET=1; shift ;;
     -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
@@ -251,7 +257,10 @@ else
 fi
 
 if have curl; then
-  health="$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health" 2>/dev/null)"
+  # Loopback must bypass any proxy in the environment: with http_proxy set, curl
+  # sends 127.0.0.1 to the proxy and gets its error page back, which reads as
+  # "service down" on a perfectly healthy host.
+  health="$(curl -fsS --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/api/health" 2>/dev/null)"
   if [ -n "$health" ]; then
     pass "C4 回环 /api/health 有响应"
     hv="$(printf '%s' "$health" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"

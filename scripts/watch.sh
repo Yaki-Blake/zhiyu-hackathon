@@ -42,25 +42,33 @@ DB="${ZHIYU_DB:-/srv/zhiyu/var/zhiyu.sqlite3}"
 NOTIFY_CMD="${ZHIYU_NOTIFY_CMD:-}"
 VERBOSE=0
 
+# `shift 2` on a trailing option with no value fails without consuming anything,
+# so $1 stays the same and the loop spins forever. Under cron that is a hung
+# process every five minutes and no alerts at all, so a missing value is fatal
+# and loud instead.
+need_value() {
+  [ "$2" -ge 2 ] || { echo "option $1 needs a value" >&2; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --integrity) MODE="integrity"; shift ;;
     --reset) MODE="reset"; shift ;;
-    --url) URL="${2:-}"; shift 2 ;;
+    --url) need_value "$1" "$#"; URL="$2"; shift 2 ;;
     --url=*) URL="${1#*=}"; shift ;;
-    --state) STATE="${2:-}"; shift 2 ;;
+    --state) need_value "$1" "$#"; STATE="$2"; shift 2 ;;
     --state=*) STATE="${1#*=}"; shift ;;
-    --log) LOG="${2:-}"; shift 2 ;;
+    --log) need_value "$1" "$#"; LOG="$2"; shift 2 ;;
     --log=*) LOG="${1#*=}"; shift ;;
-    --threshold) THRESHOLD="${2:-}"; shift 2 ;;
+    --threshold) need_value "$1" "$#"; THRESHOLD="$2"; shift 2 ;;
     --threshold=*) THRESHOLD="${1#*=}"; shift ;;
-    --disk) DISK="${2:-}"; shift 2 ;;
+    --disk) need_value "$1" "$#"; DISK="$2"; shift 2 ;;
     --disk=*) DISK="${1#*=}"; shift ;;
-    --disk-min) DISK_MIN="${2:-}"; shift 2 ;;
+    --disk-min) need_value "$1" "$#"; DISK_MIN="$2"; shift 2 ;;
     --disk-min=*) DISK_MIN="${1#*=}"; shift ;;
-    --db) DB="${2:-}"; shift 2 ;;
+    --db) need_value "$1" "$#"; DB="$2"; shift 2 ;;
     --db=*) DB="${1#*=}"; shift ;;
-    --notify) NOTIFY_CMD="${2:-}"; shift 2 ;;
+    --notify) need_value "$1" "$#"; NOTIFY_CMD="$2"; shift 2 ;;
     --notify=*) NOTIFY_CMD="${1#*=}"; shift ;;
     --verbose|-v) VERBOSE=1; shift ;;
     -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
@@ -124,14 +132,31 @@ load_state() {
 
 save_state() {
   local tmp="$STATE.tmp.$$"
-  {
-    printf 'fails=%s\n' "$FAILS"
+  # `mv file dir` succeeds by moving the file inside the directory, which would
+  # look like a saved state that is never read back.
+  [ -d "$STATE" ] && { rm -f "$tmp" 2>/dev/null; return 1; }
+  { printf 'fails=%s\n' "$FAILS"
     printf 'alerted=%s\n' "$ALERTED"
     printf 'disk_low=%s\n' "$DISK_LOW"
     printf 'last_ok=%s\n' "$LAST_OK"
     printf 'first_fail=%s\n' "$FIRST_FAIL"
     printf 'last_code=%s\n' "$LAST_CODE"
-  } > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+  } > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  mv "$tmp" "$STATE" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
+# Losing the counter is not a cosmetic problem: with no state file every run
+# starts at "one failure", so it never reaches the threshold and the service can
+# be down for a week without a single alert. Fail loudly instead - cron captures
+# this into watch.out, and the preflight checks the directory's writability.
+persist() {
+  save_state && return 0
+  printf '%s\n' "[知遇] 探活无法记录状态：$STATE
+目录不可写或磁盘已满，告警计数与去重都会失效（连续失败永远不会达到阈值）。
+时间：$(stamp)
+下一步：chown zhiyu /srv/zhiyu/var；df -h 看是否写满。" >&2
+  logline "state write FAILED: $STATE"
+  exit 2
 }
 
 load_state
@@ -175,7 +200,18 @@ check_disk() {
   command -v df >/dev/null 2>&1 || return 0
   local used free
   used="$(df -Pk "$DISK" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}')"
-  case "$used" in ''|*[!0-9]*) return 0 ;; esac
+  case "$used" in
+    ''|*[!0-9]*)
+      # A wrong --disk used to turn the check off quietly: df failed, the
+      # function returned, and nobody ever learned that disk monitoring was
+      # never running. A typo in a config flag deserves a hard stop.
+      printf '%s\n' "[知遇] 磁盘检查读不到 $DISK：路径不存在或 df 不可用，磁盘告警实际上是关掉的
+时间：$(stamp)
+下一步：改成真实的挂载点，例如 --disk / 或 --disk /srv" >&2
+      logline "disk check FAILED: cannot read $DISK"
+      exit 2
+      ;;
+  esac
   free=$((100 - used))
 
   if [ "$free" -lt "$DISK_MIN" ]; then
@@ -189,19 +225,29 @@ check_disk() {
       logline "disk alert: ${used}% used on $DISK"
       notify "$msg"
       DISK_LOW=1
-      save_state
+      persist
     fi
   elif [ "$DISK_LOW" = "1" ]; then
     logline "disk recovered: ${free}% free on $DISK"
     DISK_LOW=0
-    save_state
+    persist
   fi
 }
 
 check_disk
 
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null)"
+# Loopback must never go through a proxy: with http_proxy set (common where
+# egress needs one) curl hands 127.0.0.1 to the proxy and comes back with the
+# proxy's own error page, so a healthy service looks down. The exclusion list is
+# passed unconditionally - naming loopback hosts costs nothing for a public URL.
+# (An unquoted `--noproxy *` would be glob-expanded into the working directory.)
+NOPROXY="127.0.0.1,localhost,::1"
+
+code="$(curl -s -o /dev/null -w '%{http_code}' --noproxy "$NOPROXY" --max-time 10 "$URL" 2>/dev/null)"
 [ -n "$code" ] || code="000"
+# Anything that is not a plain three-digit code (curl noise, several URLs) is
+# treated as no answer rather than trusted as a status.
+case "$code" in [0-9][0-9][0-9]) ;; *) code="000" ;; esac
 LAST_CODE="$code"
 
 # 200 means alive. 503 is a failure like any other — the health endpoint reports
@@ -236,7 +282,7 @@ HTTP：$code
     logline "ok: http=$code"
   fi
   FAILS=0; ALERTED=0; FIRST_FAIL=""; LAST_OK="$(date +%s)"
-  save_state
+  persist
   exit 0
 fi
 
@@ -246,13 +292,13 @@ FAILS=$((FAILS + 1))
 
 if [ "$FAILS" -lt "$THRESHOLD" ]; then
   logline "probe failed $FAILS/$THRESHOLD: http=$code"
-  save_state
+  persist
   exit 0
 fi
 
 if [ "$ALERTED" = "1" ]; then
   logline "still down ($FAILS failures, http=$code), alert already sent"
-  save_state
+  persist
   exit 1
 fi
 
@@ -266,6 +312,11 @@ esac
 if [ "$code" = "503" ]; then
   what="进程在，但 /api/health 返回 503：数据库不可用（磁盘满、库损坏或路径不对）"
   hint="先看 df -h 与 journalctl -u zhiyu -n 50，再跑 scripts/watch.sh --integrity"
+elif case "$code" in 3??) true ;; *) false ;; esac; then
+  # A redirect is not an outage, and "check systemctl" would send the reader to
+  # the wrong place: the usual cause is a probe URL that is missing its https.
+  what="探活地址返回 ${code} 重定向：服务本身大概率正常，是 --url 指错了"
+  hint="把 --url 换成跳转后的最终地址（通常是 https 开头），再跑一次 curl -sI $URL 确认"
 else
   what="连续 $FAILS 次探测失败，HTTP ${code}"
   hint="先 systemctl status zhiyu，再 curl -s $URL"
@@ -283,6 +334,6 @@ printf '%s\n' "$msg" | sed 's/^/ /' >&2
 logline "ALERT after $FAILS failures: http=$code"
 notify "$msg"
 ALERTED=1
-save_state
+persist
 
 exit 1

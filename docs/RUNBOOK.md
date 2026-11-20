@@ -28,7 +28,7 @@ cd /srv/zhiyu/app
 sudo ./scripts/preflight.sh
 ```
 
-43 项分七组：系统依赖、`/etc/zhiyu.env` 配置一致性、systemd 与回环健康、公网与证书、备份与定时任务（含探活是否挂上）、数据库容量与 `runs` 留存、版本标识。
+42 项分七组：系统依赖、`/etc/zhiyu.env` 配置一致性、systemd 与回环健康、公网与证书、备份与定时任务（含探活是否挂上）、数据库容量与 `runs` 留存、版本标识。
 
 结尾汇总 `通过 / 警告 / 失败 / 跳过`。**有失败退出码 1**，可以接进脚本。`SKIP` 不算通过——读不到 `zhiyu` 的 crontab（要 root）或机器上没有 systemctl 时会被跳过，那几项要手动看。
 

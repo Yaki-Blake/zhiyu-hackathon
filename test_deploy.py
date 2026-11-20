@@ -9,6 +9,7 @@ import http.cookiejar
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -358,6 +359,101 @@ class ScheduledJobs(unittest.TestCase):
         modes = {line.split("\t")[-1]: line.split()[0] for line in out.stdout.strip().splitlines()}
         not_exec = [name for name, mode in modes.items() if mode != "100755"]
         self.assertEqual(not_exec, [], f"这些脚本在 git 里不是 755，cron 按路径调用会静默失败：{not_exec}")
+
+
+class WatchScript(unittest.TestCase):
+    """`scripts/watch.sh` runs unattended every five minutes; each check here
+    covers a way it used to fail quietly.
+
+    * A trailing option with no value left `$1` in place and the parse loop spun
+      forever — under cron that is a new hung process every five minutes.
+    * A state file that cannot be written restarts the failure count on every
+      run, so the threshold is never reached and a dead service never alerts.
+    * A proxy in the environment answers a loopback probe with its own page, so
+      a healthy service reads as down (and a dead one can read as up). That one
+      is a source-level contract: the test runner and the shell it spawns do not
+      necessarily share a loopback interface.
+
+    Every path handed to the shell is relative to the repository. An absolute
+    Windows path is not a path the shell sees, and passing one is how a scratch
+    directory named `C:` ended up inside the checkout.
+    """
+
+    ROOT = Path(__file__).resolve().parent
+    WATCH = "scripts/watch.sh"
+
+    def run_watch(self, *args, timeout=30):
+        env = {k: v for k, v in os.environ.items() if not k.lower().startswith("http_proxy")}
+        return subprocess.run(
+            ["bash", self.WATCH, *args],
+            cwd=self.ROOT, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+
+    def setUp(self):
+        try:
+            probe = subprocess.run(["bash", "--version"], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("没有 bash，跳过 shell 脚本行为检查")
+        if probe.returncode != 0:
+            self.skipTest("bash 不可用")
+        self.rel = Path("var") / f"wbtest-{os.getpid()}"
+        (self.ROOT / self.rel).mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, self.ROOT / self.rel, True)
+
+    def test_option_without_value_fails_fast(self):
+        res = self.run_watch("--url", timeout=15)
+        self.assertEqual(res.returncode, 2, "缺值应当立即退出 2，而不是挂起")
+        self.assertIn("needs a value", res.stderr)
+
+    def test_unwritable_state_is_loud_not_silent(self):
+        state = self.rel / "state"
+        (self.ROOT / state).mkdir()          # a directory cannot be replaced by a file
+        res = self.run_watch(
+            "--url", "http://127.0.0.1:9/api/health",
+            "--state", state.as_posix(),
+            "--disk-min", "0",
+            timeout=30,
+        )
+        self.assertEqual(res.returncode, 2, "状态写不下去时必须以 2 退出，不能静默当作正常")
+        self.assertIn("状态", res.stderr)
+
+    def test_loopback_curl_calls_bypass_the_proxy(self):
+        offenders = []
+        for name in ("scripts/watch.sh", "scripts/preflight.sh", "scripts/restore-check.sh"):
+            for line in (self.ROOT / name).read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#") or "curl " not in stripped:
+                    continue
+                if "127.0.0.1" in stripped and "--noproxy" not in stripped:
+                    offenders.append(f"{name}: {stripped}")
+        self.assertEqual(offenders, [], f"回环 curl 必须带 --noproxy，否则代理会替服务答话：{offenders}")
+
+
+class PreflightDocs(unittest.TestCase):
+    """The preflight's item count is quoted in four documents, and it was wrong
+    in all four: the group tallies add up to 42, the docs said 43. Nobody counts
+    42 rows by hand, so the number is derived from the script here and compared
+    with the sentence that publishes it.
+    """
+
+    ROOT = Path(__file__).resolve().parent
+    PATTERNS = {
+        "docs/DEPLOY.md": r"满配共 (\d+) 项",
+        "docs/RUNBOOK.md": r"(\d+) 项分七组",
+        "README.md": r"一条命令查 (\d+) 项",
+        "docs/进度与交接.md": r"预检 (\d+) 项",
+    }
+
+    def test_documents_quote_the_real_item_count(self):
+        text = (self.ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
+        count = len(set(re.findall(r'(?:pass|fail|warn|skip)\s+"([A-G]\d+)', text)))
+        self.assertGreater(count, 30, "没解析到检查项编号，preflight.sh 的标签格式变了")
+        for name, pattern in self.PATTERNS.items():
+            body = (self.ROOT / name).read_text(encoding="utf-8")
+            found = re.findall(pattern, body)
+            self.assertTrue(found, f"{name} 里找不到「{pattern}」，这句话是项数的唯一来源，别删")
+            for value in found:
+                self.assertEqual(int(value), count, f"{name} 写的项数与 preflight.sh 实际的 {count} 项不一致")
 
 
 if __name__ == "__main__":
