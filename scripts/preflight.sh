@@ -349,10 +349,10 @@ else
   fi
 
   srv="$(curl -sS -D - -o /dev/null --max-time 10 "$BASE/" 2>/dev/null | tr -d '\r' | grep -i '^server:' | head -1)"
-  if [ -n "$srv" ]; then
-    warn "D6 响应带 $srv；Caddyfile 里应保留 -Server"
+  if printf '%s' "$srv" | grep -Eqi 'python|php|nginx/[0-9]|apache/[0-9]|[0-9]+\.[0-9]+\.[0-9]+'; then
+    warn "D6 响应暴露实现版本：$srv；应只保留产品标识"
   elif [ "$code" = "200" ]; then
-    pass "D6 响应头没有 Server，不暴露实现"
+    pass "D6 响应头不暴露实现版本${srv:+（仅 $srv）}"
   else
     skip "D6 站点本身没返回 200，响应头无从判断"
   fi
