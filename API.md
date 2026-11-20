@@ -6,18 +6,27 @@
 | --- | --- |
 | GET /api/workspace | projects、example、mode=synthetic、liveStatus=not_configured |
 | POST /api/projects | name、url、audience、material、task、output、limits；带 projectId 为更新。返回已保存项目 |
-| GET /api/projects/:id | project、最新 run 或 null、历史 cards（含 active） |
-| POST /api/projects/:id/runs | requestId、mode=synthetic/live；相同项目和 requestId 去重 |
+| GET /api/projects/:id | project、最新 run 或 null、历史 cards（含 active、publishedAt、runId、candidateId） |
+| POST /api/projects/:id/runs | requestId、mode=synthetic/live；相同项目与 requestId 去重，切换 mode 返回 409 |
+| GET /api/projects/:id/runs | runs[]：runId、requestId、mode、status、errorCode、candidateCount、createdAt；倒序最多 50 条，不含候选全文 |
 | GET /api/projects/:id/runs/:runId | runId、requestId、mode、status、errorCode、candidates、projectSnapshot |
 | GET /api/sources/:fixtureId | 公开的合成全文与引用；不代表知乎内容 |
-| POST /api/projects/:id/publish | runId、candidateId、title、material、steps、criterion、question。核验归属、当前能力和候选判断后生成 slug/version。重复发布相同当前快照返回同一版本 |
+| POST /api/projects/:id/publish | runId、candidateId、title、material、steps、criterion、question。核验归属、当前能力和候选判断后生成 slug/version。重复发布相同当前快照返回同一版本；每次发布记录来源 runId 与 candidateId，旧版本链接继续可用 |
 | GET /api/cards/:slug | 公开快照：slug、version、tool、url、scene、mode 及上面的五项卡片内容；签发读者会话 |
 | POST /api/cards/:slug/visit 或 /open | version；服务端由读者 Cookie + slug 去重；visit 返回既有 receipt 或 null |
 | POST /api/cards/:slug/feedback | version、submissionId、status=done/blocked、step、note。blocked 必填 step；同会话同版本一份，返回 receipt |
 | POST /api/projects/:id/withdraw/:slug | 空对象；撤回读者链接，保留反馈 |
-| GET /api/projects/:id/results | versions[]：slug、version、visits、opened、completed、feedback[]；前端选择版本或汇总 |
+| GET /api/projects/:id/results | versions[]：slug、version、active、publishedAt、visits、opened、completed、feedback[]；按版本倒序，前端选择版本或汇总 |
 
 前端路由：/#home、/#edit/new、/#edit/:projectId、/#match/:projectId、/#card/:projectId/:candidateId、/#published/:projectId/:slug、/#result/:projectId；匿名读者 /t/:slug；样例原工具 /sample；合成来源 /source/:fixtureId。
+
+### 版本与链接的约定
+
+每次发布生成新的 `slug` 与 `version`，旧版本不会因为新版本出现而失效——已经在读者手里的链接继续打开它当时看到的那个版本，反馈也记在那一版上。要让某个链接停止服务，必须显式调用 `withdraw`，它只影响传入的那一个 `slug`，其他版本和已有反馈都不动。
+
+因此「最新版本」不是「唯一活着的版本」。看板按 `version` 倒序展示，`active` 为 false 的表示已撤回；F2 若要标注「当前推荐」，取 `versions[0]` 且 `active` 为 true 的那一条。
+
+卡片记录了它从哪来：`GET /api/projects/:id` 返回的 `cards[]` 里带 `runId`、`candidateId`、`publishedAt`，用于回查是第几次匹配、哪个候选产出的。这三个字段只给所有者，公开卡不含。
 
 ## 可复现的匹配结果
 

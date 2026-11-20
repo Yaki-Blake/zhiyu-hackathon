@@ -221,12 +221,32 @@ def group_publish(base):
         state["reader"] = reader
         return "无内部字段泄露"
 
+    def traceable():
+        cards = owner.call(f"projects/{pid}")["cards"]
+        assert cards, "项目详情没有返回卡片"
+        latest = cards[0]
+        assert latest["runId"] == state["run"]["runId"], "卡片没有记录来源运行"
+        assert latest["publishedAt"] > 0, "卡片没有发布时间"
+        public = state["reader"].call(f"cards/{latest['slug']}")
+        for leaked in ("runId", "candidateId"):
+            assert leaked not in public, f"公开卡片泄露了 {leaked}"
+        return f"runId={latest['runId'][:8]}…"
+
+    def mode_conflict():
+        status, _ = owner.call(
+            f"projects/{pid}/runs", {"requestId": "accept-1", "mode": "live"}, expect=None
+        )
+        assert status == 409, f"同一 requestId 切换模式应返回 409，实际 {status}"
+        return "合成与真实不能共用 requestId"
+
     check("匹配运行返回候选与判断", runs)
     check("相同 requestId 幂等", idempotent)
     check("真实模式返回 not_configured", live_not_configured)
+    check("同一 requestId 不可切换模式", mode_conflict)
     check("发布生成 v1 卡片", publish)
     check("相同快照重复发布不升版本", publish_same)
     check("读者可见且不含内部字段", reader_view)
+    check("卡片可追溯到运行", traceable)
     state["owner"] = owner
     group_publish.state = state
 

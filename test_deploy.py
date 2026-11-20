@@ -219,6 +219,11 @@ class Deploy(unittest.TestCase):
         with closing(sqlite3.connect(legacy)) as conn, conn:
             conn.execute("CREATE TABLE projects(id TEXT PRIMARY KEY,owner TEXT NOT NULL,data TEXT NOT NULL)")
             conn.execute("INSERT INTO projects VALUES('p1','o1',?)", (json.dumps({"name": "旧项目"}),))
+            # A card table from before provenance was recorded must not block startup.
+            conn.execute(
+                "CREATE TABLE cards(slug TEXT PRIMARY KEY,pid TEXT NOT NULL,version INTEGER NOT NULL,"
+                "signature TEXT NOT NULL,data TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1)"
+            )
         server.DB = legacy
         server.init()
         server.init()  # 幂等
@@ -228,6 +233,9 @@ class Deploy(unittest.TestCase):
             self.assertIn("updated_at", columns)
             self.assertEqual(json.loads(conn.execute("SELECT data FROM projects").fetchone()[0])["name"], "旧项目")
             self.assertEqual(conn.execute("SELECT v FROM meta WHERE k='schema_version'").fetchone()[0], "2")
+            card_columns = {row[1] for row in conn.execute("PRAGMA table_info(cards)")}
+            for name in ("published_at", "run_id", "candidate_id"):
+                self.assertIn(name, card_columns)
 
 
 if __name__ == "__main__":

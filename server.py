@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS cards(
   data TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
   published_at INTEGER NOT NULL DEFAULT 0,
+  run_id TEXT NOT NULL DEFAULT '',
+  candidate_id TEXT NOT NULL DEFAULT '',
   UNIQUE(pid, version)
 );
 CREATE TABLE IF NOT EXISTS visits(
@@ -168,7 +170,11 @@ CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT NOT NULL);
 EXTRA_COLUMNS = {
     "projects": [("created_at", "INTEGER NOT NULL DEFAULT 0"), ("updated_at", "INTEGER NOT NULL DEFAULT 0")],
     "runs": [("created_at", "INTEGER NOT NULL DEFAULT 0")],
-    "cards": [("published_at", "INTEGER NOT NULL DEFAULT 0")],
+    "cards": [
+        ("published_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("run_id", "TEXT NOT NULL DEFAULT ''"),
+        ("candidate_id", "TEXT NOT NULL DEFAULT ''"),
+    ],
     "visits": [("first_seen", "INTEGER NOT NULL DEFAULT 0"), ("opened_at", "INTEGER")],
 }
 
@@ -217,9 +223,36 @@ def seed_demo():
     with closing(sqlite3.connect(DB, timeout=8)) as conn, conn:
         if conn.execute("SELECT 1 FROM meta WHERE k='demo_owner'").fetchone():
             return
-        owner, pid, slug = uid(), uid(), uid()
+        owner, pid, slug, run_id = uid(), uid(), uid(), uid()
         stamp = now()
-        conn.execute("INSERT INTO projects VALUES(?,?,?,?,?)", (pid, owner, pack(EXAMPLE), stamp, stamp))
+        conn.execute(
+            "INSERT INTO projects(id,owner,data,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (pid, owner, pack(EXAMPLE), stamp, stamp),
+        )
+        # A demo card must trace back to a run, otherwise the dashboard shows a card
+        # whose origin is empty and the match page has nothing to open.
+        outcome = match_run(EXAMPLE, "synthetic")
+        conn.execute(
+            "INSERT INTO runs(id,pid,rid,data,created_at) VALUES(?,?,?,?,?)",
+            (
+                run_id,
+                pid,
+                "demo-1",
+                pack(
+                    dict(
+                        runId=run_id,
+                        requestId="demo-1",
+                        mode="synthetic",
+                        status=outcome["status"],
+                        errorCode=outcome["errorCode"],
+                        candidates=outcome["candidates"],
+                        projectSnapshot=EXAMPLE,
+                    )
+                ),
+                stamp,
+            ),
+        )
+        chosen = next((item for item in outcome["candidates"] if item["judgment"] == "适配"), None)
         card = dict(
             slug=slug,
             version=1,
@@ -230,11 +263,15 @@ def seed_demo():
             question="哪一句原话不能支持你的结论？",
             tool=EXAMPLE["name"],
             url=EXAMPLE["url"],
-            scene="整理访谈时，怎样找到能支撑结论的原话？",
+            scene=chosen["title"] if chosen else "整理访谈时，怎样找到能支撑结论的原话？",
             mode="synthetic",
         )
         signature = hashlib.sha256(pack([pid, "demo"]).encode()).hexdigest()
-        conn.execute("INSERT INTO cards VALUES(?,?,?,?,?,?,?)", (slug, pid, 1, signature, pack(card), 1, stamp))
+        conn.execute(
+            "INSERT INTO cards(slug,pid,version,signature,data,active,published_at,run_id,candidate_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (slug, pid, 1, signature, pack(card), 1, stamp, run_id, chosen["id"] if chosen else ""),
+        )
         rows = [
             ("done", "", "三句都找到了。第二句讲的是时间安排，不能支持结论。"),
             ("blocked", "核对第三句", "候选句来自另一段访谈，找不到上下文。"),
@@ -513,22 +550,62 @@ class Handler(BaseHTTPRequestHandler):
             project = self.own(conn, pid)
 
             if len(seg) == 3 and not post:
-                row = conn.execute("SELECT data FROM runs WHERE pid=? ORDER BY rowid DESC LIMIT 1", (pid,)).fetchone()
+                row = conn.execute(
+                    "SELECT data FROM runs WHERE pid=? ORDER BY created_at DESC,rowid DESC LIMIT 1", (pid,)
+                ).fetchone()
                 cards = [
-                    dict(**json.loads(data), active=bool(active))
-                    for data, active in conn.execute(
-                        "SELECT data,active FROM cards WHERE pid=? ORDER BY version DESC", (pid,)
+                    dict(
+                        **json.loads(data),
+                        active=bool(active),
+                        publishedAt=published,
+                        runId=run_id,
+                        candidateId=candidate_id,
+                    )
+                    for data, active, published, run_id, candidate_id in conn.execute(
+                        "SELECT data,active,published_at,run_id,candidate_id FROM cards "
+                        "WHERE pid=? ORDER BY version DESC",
+                        (pid,),
                     )
                 ]
                 return dict(project=project, run=json.loads(row[0]) if row else None, cards=cards)
 
+            if seg[3:] == ["runs"] and not post:
+                # Version history of the drafts, newest first. Candidate bodies are omitted:
+                # a list is for picking a run to look at, not for shipping them all.
+                items = []
+                for run_id, data, created in conn.execute(
+                    "SELECT id,data,created_at FROM runs WHERE pid=? ORDER BY created_at DESC,rowid DESC LIMIT 50",
+                    (pid,),
+                ):
+                    run = json.loads(data)
+                    items.append(
+                        dict(
+                            runId=run_id,
+                            requestId=run.get("requestId"),
+                            mode=run.get("mode"),
+                            status=run.get("status"),
+                            errorCode=run.get("errorCode"),
+                            candidateCount=len(run.get("candidates") or []),
+                            createdAt=created,
+                        )
+                    )
+                return dict(runs=items)
+
             if seg[3:] == ["runs"] and post:
                 rid = fields(body, ["requestId"], 100)["requestId"]
-                row = conn.execute("SELECT data FROM runs WHERE pid=? AND rid=?", (pid, rid)).fetchone()
-                if row:
-                    return json.loads(row[0])
                 mode = body.get("mode", "synthetic")
                 ck(mode in ("synthetic", "live"), 400, "未知模式。")
+                row = conn.execute("SELECT data FROM runs WHERE pid=? AND rid=?", (pid, rid)).fetchone()
+                if row:
+                    cached = json.loads(row[0])
+                    # Replaying a requestId must not change the answer: otherwise switching
+                    # to live mode would silently return the older synthetic result.
+                    ck(
+                        cached.get("mode") == mode,
+                        409,
+                        "该 requestId 已用于另一种模式，请更换 requestId 后重试。",
+                    )
+                    return cached
                 outcome = match_run(project, mode)
                 run = dict(
                     runId=uid(),
@@ -577,8 +654,18 @@ class Handler(BaseHTTPRequestHandler):
                     mode=run["mode"],
                 )
                 conn.execute(
-                    "INSERT INTO cards(slug,pid,version,signature,data,active,published_at) VALUES(?,?,?,?,?,1,?)",
-                    (snapshot["slug"], pid, snapshot["version"], signature, pack(snapshot), now()),
+                    "INSERT INTO cards(slug,pid,version,signature,data,active,published_at,run_id,candidate_id) "
+                    "VALUES(?,?,?,?,?,1,?,?,?)",
+                    (
+                        snapshot["slug"],
+                        pid,
+                        snapshot["version"],
+                        signature,
+                        pack(snapshot),
+                        now(),
+                        run["runId"],
+                        draft["candidateId"],
+                    ),
                 )
                 return snapshot
 
@@ -589,8 +676,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if seg[3:] == ["results"] and not post:
                 blocks = []
-                for slug, version in conn.execute(
-                    "SELECT slug,version FROM cards WHERE pid=? ORDER BY version DESC", (pid,)
+                for slug, version, active, published in conn.execute(
+                    "SELECT slug,version,active,published_at FROM cards WHERE pid=? ORDER BY version DESC", (pid,)
                 ):
                     visits, opened = conn.execute(
                         "SELECT count(*),coalesce(sum(opened),0) FROM visits WHERE slug=?", (slug,)
@@ -606,6 +693,8 @@ class Handler(BaseHTTPRequestHandler):
                         dict(
                             slug=slug,
                             version=version,
+                            active=bool(active),
+                            publishedAt=published,
                             visits=visits,
                             opened=opened,
                             completed=sum(item["status"] == "done" for item in rows),

@@ -57,8 +57,12 @@
 | `data` | TEXT | 公开快照，不含归属信息 |
 | `active` | INTEGER | 0 表示已撤回，反馈保留 |
 | `published_at` | INTEGER | Unix 秒 |
+| `run_id` | TEXT | 产出这张卡的运行，用于回查来源 |
+| `candidate_id` | TEXT | 选中的候选 |
 
-卡片快照字段：`slug,version,title,material,steps,criterion,question,tool,url,scene,mode`。
+卡片快照字段：`slug,version,title,material,steps,criterion,question,tool,url,scene,mode`。`run_id` 与 `candidate_id` 只存在列里，不进快照，公开接口看不到。
+
+发布新版本不会下线旧版本。旧 `slug` 继续可用，反馈记在对应 `version` 上；只有显式撤回才把某个 `slug` 置为不可读。理由是链接一旦发出去就收不回，改内容就让读者看到「被换掉的版本」比让旧链接 404 更糟。
 
 ### candidate（内嵌在 runs.data，不单独建表）
 
@@ -89,9 +93,9 @@
 ## 不变量
 
 1. 归属：项目接口必须匹配 `owner`，否则 404，不区分不存在与无权访问。
-2. 快照不可变：`cards.data` 发布后只读，撤回只改 `active`。
+2. 快照不可变：`cards.data` 发布后只读，撤回只改 `active`；新旧版本并存，不互相覆盖。
 3. 版本单调：新版本为项目内最大值加一。
-4. 幂等：同 `(pid,rid)` 返回原运行；同内容重复发布返回原版本；同 `(slug,sid)` 只落一条反馈。
+4. 幂等：同 `(pid,rid)` 返回原运行，但 `mode` 变了返回 409；同内容重复发布返回原版本；同 `(slug,sid)` 只落一条反馈。
 5. 计数：访问数 = `visits` 行数；进入工具数 = `opened=1` 行数；完成数 = `feedback.status='done'` 行数。
 
 ## 迁移
