@@ -157,7 +157,7 @@ sudo ./scripts/preflight.sh --base https://zhiyu.example.com
 sudo ./scripts/preflight.sh --skip-net            # 机器还没通外网时
 ```
 
-它只读，不改任何东西。满配共 42 项，分七组：
+它只读，不改任何东西。满配共 43 项，分七组：
 
 | 组 | 查什么 |
 | --- | --- |

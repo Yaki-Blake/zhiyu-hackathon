@@ -52,7 +52,7 @@ $env:ZHIYU_DEMO='1'; python server.py --open
 | 进程与反向代理 | `deploy/zhiyu.service`、`deploy/Caddyfile`、`deploy/nginx.conf` |
 | 备份与恢复演练 | `scripts/backup.sh`、`scripts/restore-check.sh` |
 | 探活告警与定时任务 | `scripts/watch.sh`、`deploy/crontab` |
-| 部署预检（主机上一条命令查 42 项，只读） | `scripts/preflight.sh` |
+| 部署预检（主机上一条命令查 43 项，只读） | `scripts/preflight.sh` |
 | 并发基准 | `scripts/bench.py` |
 | 黑盒验收 | `scripts/accept.py`，判读方法见 `docs/验收.md` |
 

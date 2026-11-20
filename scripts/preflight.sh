@@ -244,9 +244,9 @@ fi
 
 BUILD="$(env_get ZHIYU_BUILD || echo 'dev')"
 if [ "$BUILD" = "dev" ]; then
-  warn "B9b ZHIYU_BUILD 仍是 dev，验收时无法用 /api/health 核对版本"
+  warn "B10 ZHIYU_BUILD 仍是 dev，验收时无法用 /api/health 核对版本"
 else
-  pass "B9b ZHIYU_BUILD=$BUILD"
+  pass "B10 ZHIYU_BUILD=$BUILD"
 fi
 
 # --- C. process ------------------------------------------------------------
@@ -515,7 +515,9 @@ if [ -d "$APP_DIR/.git" ] && have git; then
     pass "G3 工作区干净，部署的是提交内容"
   fi
 else
-  skip "G1-G3 没有 $APP_DIR/.git 或没有 git"
+  skip "G1 没有 $APP_DIR/.git 或没有 git，无法核对分支"
+  skip "G2 没有 $APP_DIR/.git 或没有 git，无法核对构建标识"
+  skip "G3 没有 $APP_DIR/.git 或没有 git，无法核对工作区是否干净"
 fi
 
 # --- summary ---------------------------------------------------------------

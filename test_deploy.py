@@ -431,8 +431,8 @@ class WatchScript(unittest.TestCase):
 
 class PreflightDocs(unittest.TestCase):
     """The preflight's item count is quoted in four documents, and it was wrong
-    in all four: the group tallies add up to 42, the docs said 43. Nobody counts
-    42 rows by hand, so the number is derived from the script here and compared
+    in all four: the group tallies add up to 43, the docs said 44. Nobody counts
+    43 rows by hand, so the number is derived from the script here and compared
     with the sentence that publishes it.
     """
 
