@@ -133,3 +133,60 @@
 | `projects`、`cards`、`visits`、`feedback`、`recovery`、`limits` | 不自动删 | 前三者是业务数据与计数口径；`limits` 由限流逻辑按 10 分钟窗口自清 |
 
 执行：`python scripts/prune.py` 先看会删几条，确认后 `--apply`。默认窗口 90 天，可用 `--days` 或 `ZHIYU_RUN_RETENTION_DAYS` 调整。窗口设为零以下没有意义，`prune` 会按 1 天处理。
+
+## 匹配效果对照数据（B1-4 / P3）
+
+分工 PDF 的 B1-4 要求「比较搜索原序与任务重排，统计各自前三条有几条适配」，P3 要求「每个项目标注 10 条可核对候选」。两者要用同一套格式才能对拍，否则人工标签和系统排序对不上。
+
+借鉴 [ranx](https://github.com/AmenRa/ranx) 的 **Qrels / Run 分离**结构（人工标注与系统排序各自独立、用同一连接键对齐），定义 `zhiyu-eval/v1` 契约。**这组数据不进 SQLite、不改服务端、不改现有候选字段**——它是离线评估材料，走 git 版本化，随 PR 提交。
+
+三种 JSON 文件放 `docs/eval/`（仓库有 `fixtures.py` 但没有 `fixtures/` 目录，故用 `docs/eval/`）：
+
+### qrels.json —— 人工标签（P 交付）
+
+```json
+{"schema":"zhiyu-eval/v1","kind":"qrels","projects":{
+  "<projectId>":{"<candidateId>":2,"<candidateId>":0}
+}}
+```
+
+值是整数相关性等级，与候选的 `judgment` 三档一一对应：
+
+| 等级 | 含义 | 对应 `candidate.judgment` |
+| --- | --- | --- |
+| 2 | 适配 | 适配 |
+| 1 | 待核实 | 待核实 |
+| 0 | 排除 | 排除 |
+
+P3 每个项目标 10 条；P1 的三条候选是本契约的最小子集。
+
+### run-*.json —— 排序结果（B1 交付）
+
+```json
+{"schema":"zhiyu-eval/v1","kind":"run","label":"search-order","projects":{
+  "<projectId>":["<candidateId>","<candidateId>","<candidateId>"]
+}}
+```
+
+`label` 取 `search-order`（搜索原序）或 `task-order`（任务重排）。数组顺序即展示顺序，第一条排名最高。
+
+### 连接键与对拍
+
+连接键是 `candidate.id`：`runs.data.candidates[].id` ↔ `qrels.projects[pid]` 的键 ↔ `run.projects[pid]` 数组元素。三方用同一个 id，不需要拆 `candidates` 表，也不需要回填历史运行。
+
+对拍命令（纯标准库，无第三方依赖）：
+
+```bash
+python scripts/eval.py --qrels docs/eval/qrels.example.json \
+  --runs docs/eval/run-search.example.json docs/eval/run-task.example.json
+```
+
+输出每个 run 的 Precision@3、MRR、NDCG@3、Hit@3，并以人工标签为基准直接比较两种排序。指标定义与 ranx 对齐（Precision/MRR/NDCG），但用标准库实现，避免把 numba、numpy、pandas 等重依赖带进部署栈。
+
+### 为什么走 git 而不进生产库
+
+ranxhub 的价值是「预计算 run 可下载、可分享、可复现」。知遇的对应做法是：对照数据作为 `docs/eval/` 下的版本化文件随 PR 提交，复现时 checkout 对应 commit 即可。备份脚本 `backup.sh` 只备份 SQLite，不覆盖这些文件——这是有意的：对照数据是评估材料，不是业务数据，不该混进生产备份或 `var/` 运行时目录。
+
+`docs/eval/` 里的三个 `.example.json` 是可直接运行的模板：候选 id 与 `fixtures.py` 的 `SOURCES` 对齐，任务重排示例把人工判为适配的 `interview` 提到首位。P1/P3 交付时按同格式替换 `projects`，B1 交付时替换每个 run 的排名数组。
+
+`eval.py` 的 11 组测试在 `test_eval.py`，独立运行 `python -m unittest test_eval`——其中三组用 ranx README 公布的 NDCG@5=0.7861、MAP@5≈0.6416、MRR=0.75 对拍，确保这套指标不是自说自话。它不属于 69 组主套件，避免改动主套件的既有计数口径。
